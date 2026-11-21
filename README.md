@@ -1,6 +1,6 @@
 # Mech Royale practice entry
 
-This entry adapts the MIT-licensed [LanceHuang245/mech-royale bot at commit 171bc06](https://github.com/LanceHuang245/mech-royale/tree/171bc0675b04c4095f5a3619cc63664b8a338922). Its Python protocol wrapper and original starting bot came from the [Builders Mech Royale kit](https://www.joinbuilders.org/buildathon/tracks/builders). The runtime uses Python's standard library and the map supplied by the scorer. The image enables the upstream `sneak` configuration.
+This entry adapts the MIT-licensed [LanceHuang245/mech-royale bot at commit 171bc06](https://github.com/LanceHuang245/mech-royale/tree/171bc0675b04c4095f5a3619cc63664b8a338922). Its Python protocol wrapper and original starting bot came from the [Builders Mech Royale kit](https://www.joinbuilders.org/buildathon/tracks/builders). The runtime uses Python's standard library and the map supplied by the scorer. This practice build uses normal walking speed with `MR_FLAGS` set to the empty string. It retains r1ver's safe-circle and supply-drop decisions. The comparison was motivated by [BackwardsDeployeds' normal-speed practice probe](https://github.com/brycehcmcgrath/mechfight-bot/commit/dd1e809f6ce769b2690ba25773c96bb7ebeff81b).
 
 ## Practice score and local development
 
