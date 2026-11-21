@@ -1,22 +1,21 @@
-# Local practice simulator
+# Local simulator
 
-One candidate plays 15 cooperating stand-in bots. In a paired run, baseline and candidate each play their own copy of every starting scenario. Changes to the submitted bot cannot change the referee's map model or the opponent implementation. Use a recent Python 3 with the standard library and Git for commit comparisons. JavaScript entries use Node.js. The official TypeScript starter runs directly with Node 22.18 or newer.
+One bot plays 15 cooperating scripted opponents. In a paired run, the baseline and candidate each play their own copy of every starting scenario. The referee uses the same map model and opponent implementation for both. Use a recent Python 3 with the standard library and Git for commit comparisons. JavaScript bots use Node.js. The TypeScript examples run directly with Node 22.18 or newer.
 
 ## Run from a clean checkout
 
-Download the official kit next to the repository. Run these commands from the repository root.
+Extract `mechfight-kit.tar.gz` next to the repository. Run these commands from the repository root.
 
 ```sh
-curl -fL https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz -o ../mechfight-kit.tar.gz
 tar -xzf ../mechfight-kit.tar.gz -C ..
 python3 -B tools/simulate.py --kit ../mechfight-kit --seed 40 --matches 2
 ```
 
-To compare the current tree against the first scored entry, keep the seed range the same for both versions. The archived baseline runs with its own protocol wrapper and neighboring modules. The baseline's Git commit must exist in the local clone.
+To compare the working tree with a Git revision, keep the seed range the same for both versions. The archived baseline runs with its own protocol wrapper and neighboring modules. Pass `git:HEAD` for the current commit or substitute a revision that exists in the local clone.
 
 ```sh
 MR_FLAGS=sneak python3 -B tools/simulate.py --kit ../mechfight-kit \
-  --bot bot.py --baseline git:97e0e588ac9fb49533602a738344cb3fdc8b1551 \
+  --bot bot.py --baseline git:HEAD \
   --seed 300 --matches 32 --output practice-300.json
 ```
 
@@ -40,18 +39,18 @@ Both referees integrate horizontal velocity over the two physics ticks in each d
 
 The referee uses the kit's recorded configuration and terrain. It advances 0.1 simulated seconds per decision. Both policies receive the same recorded per-slot RNG seed and slot 0. The world seed stays inside the referee. Once actions diverge, the matches can evolve differently. Each observation exposes the currently interpolated circle and the next circle. A dead mech shares its place with others eliminated in that tick, immediately below the survivors. At time expiry surviving mechs are ordered by HP.
 
-This practice model uses approximate opponents, movement and equipment rules. Crates, NPCs, sounds, beams, contested drops and upgrade offers are absent. The house bots' information, spawn distribution and equipment differ from the scorer. This model runs actions to completion and aborts stalled processes. Use the official `check/check.py` to check 50 ms replies and the official 48 matches to measure practice score. For free-for-all comparisons see [the FFA runner](ffa/README.md).
+This model uses approximate opponents, movement and equipment rules. Crates, NPCs, sounds, beams, contested drops and upgrade offers are absent. The model runs actions to completion and aborts stalled processes. Use the kit's `check/check.py` to check protocol conformance and response time. For free-for-all comparisons see [the FFA runner](ffa/README.md).
 
 The referee and fixed map queries adapt the upstream MIT [practice simulator](https://github.com/LanceHuang245/mech-royale/blob/171bc0675b04c4095f5a3619cc63664b8a338922/tools/sim.py) and [World class](https://github.com/LanceHuang245/mech-royale/blob/171bc0675b04c4095f5a3619cc63664b8a338922/bot.py) by LanceHuang245. The repository retains its [license and notice](../LICENSE). This adaptation adds the protocol process runner, independent map loading, paired reporting, kit fingerprints, and corrections to kill accounting and placement ties.
 
 ## Reproducing a timing-sensitive route decision
 
-TTUN's TypeScript map search yields after a wall-clock interval or a fixed number of cells. Under CPU contention, two copies of the same bot can complete different amounts of route planning. For an offline diagnostic, advance the bot's monotonic clock by a fixed 0.3 ms per call. Each 1,024-node time check then consumes the same logical budget. The Python referee still measures actual response times.
+Time-limited map searches may finish different amounts of route planning under CPU contention. For a Node.js diagnostic, advance the bot's monotonic clock by a fixed 0.3 ms per call. Each planning time check then consumes the same logical budget. The Python referee still measures actual response times.
 
 ```sh
 NODE_OPTIONS="--require=\"$PWD/tools/comparison-clock.cjs\"" python3 -B tools/simulate.py --kit ../mechfight-kit \
-  --bot git:af337d5:mech-royale/bot/bot.ts --baseline git:af337d5:mech-royale/bot/bot.ts \
+  --bot ../mechfight-kit/ts/example.ts --baseline ../mechfight-kit/ts/example.ts \
   --roof-loot --seed 301 --matches 2
 ```
 
-The example compares one identical commit with itself. Fetch its practice branch before running the command. Use this mode to isolate decision differences in bots that consult the monotonic clock. Run the official 50 ms conformance check and a second set of matches with the real clock when choosing a competition build.
+The example compares identical entry points. Substitute the bot under test for both paths to isolate decision differences in bots that use the monotonic clock. Run the kit's conformance checker and repeat with the real clock to measure response time under normal execution.

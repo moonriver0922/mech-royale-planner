@@ -1,5 +1,4 @@
-# Built by the scorer on linux/amd64. Match sandbox: no network, read-only root (writable /tmp),
-# 1 CPU, 512 MB, uid 65534, map mounted at /arena. Base image pinned because finalists are rebuilt.
+# Runtime expects the map mounted read-only at /arena.
 FROM python:3.13.9-slim
 WORKDIR /bot
 ENV MR_FLAGS=sneak
