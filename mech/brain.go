@@ -414,6 +414,30 @@ func (b *Brain) zoneGoal(z *Zone, x, y float64) (float64, float64) {
 	return z.NextCenter[0] + dx/d*r, z.NextCenter[1] + dy/d*r
 }
 
+// zoneLanding substitutes a walkable point on our side of an obstructed
+// circle destination. Keep the existing plan if the near side is outside.
+func (b *Brain) zoneLanding(me *Self, z *Zone, gx, gy float64) (float64, float64) {
+	w := b.W
+	x, y := me.Pos[0], me.Pos[1]
+	if !me.Grounded || w.Free(gx, gy) || math.Abs(me.Pos[2]-w.GroundAt(x, y)) > 1.5 ||
+		w.Comp[w.Cell(x, y)] != w.MainComp {
+		return gx, gy
+	}
+	distance := hyp(x-gx, y-gy)
+	inside := z.NextRadius - math.Min(8, z.NextRadius/4)
+	for offset := w.NS; offset <= math.Min(distance, 30); offset += w.NS {
+		cell := w.Cell(gx+(x-gx)*offset/distance, gy+(y-gy)*offset/distance)
+		if w.Comp[cell] != w.MainComp || w.Clearance[cell] < 4 {
+			continue
+		}
+		cx, cy := w.CellPos(cell)
+		if hyp(cx-z.NextCenter[0], cy-z.NextCenter[1]) <= inside {
+			return cx, cy
+		}
+	}
+	return gx, gy
+}
+
 func hasWeapon(ws []*WeaponState, kind string) (int, *WeaponState) {
 	for i, w := range ws {
 		if w != nil && w.Kind == kind {
@@ -666,7 +690,8 @@ func (b *Brain) step(o *Obs, act *Action) {
 		boost = me.Energy > 15
 		mode = "dodge"
 	case zoneMust && zdist > 2:
-		mx, my = b.travel(me, zgx, zgy)
+		zx, zy := b.zoneLanding(me, z, zgx, zgy)
+		mx, my = b.travel(me, zx, zy)
 		boost = (!me.InZone || now+tNeed >= deadline) && me.Energy > 5
 		mode = "zone"
 	case b.retreat && !finishing && !late:
@@ -752,7 +777,8 @@ func (b *Brain) step(o *Obs, act *Action) {
 			}
 		}
 	case zoneShould && zdist > 2:
-		mx, my = b.travel(me, zgx, zgy)
+		zx, zy := b.zoneLanding(me, z, zgx, zgy)
+		mx, my = b.travel(me, zx, zy)
 		mode = "zone"
 	default:
 		lc := b.chooseLoot(o, hpFrac, danger)
@@ -785,7 +811,8 @@ func (b *Brain) step(o *Obs, act *Action) {
 				}
 			}
 		} else if zdist > 3 && (!b.P.Ghost || z.NextRadius <= 30) {
-			mx, my = b.travel(me, zgx, zgy)
+			zx, zy := b.zoneLanding(me, z, zgx, zgy)
+			mx, my = b.travel(me, zx, zy)
 			mode = "zone-walk"
 		} else if b.P.Ghost {
 
