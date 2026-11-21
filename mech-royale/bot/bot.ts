@@ -10,6 +10,8 @@ const wrap = (a: number) => {
 const hyp2 = (ax: number, ay: number, bx: number, by: number) => Math.hypot(bx - ax, by - ay)
 
 type Track = { id: number; pos: number[]; vel: number[]; hp: number; maxHp: number; t: number; weapons: string[]; charging: boolean; aim: number[]; cubes: number }
+type FarmTarget = { pos: number[]; height: number; vel?: number[] }
+type CombatResource = { goal: [number, number]; value: number; farm?: FarmTarget }
 
 const WEAPON_PREF: Record<string, number> = { laser: 3.2, lightning: 2.5, mortar: 1, gun: 0 }
 const UPGRADE_PREF = [
@@ -358,9 +360,9 @@ class Brain {
       const prefer = lightS >= 0 ? 28 : laserS >= 0 ? 110 : 70
       if (losing && map) {
         mode = "retreat"
-        const cov = map.coverFrom(x, y, tp[0], tp[1], tp[2] + 8, 50)
-        if (cov) moveGoal = cov
-        else moveGoal = [x - (tp[0] - x), y - (tp[1] - y)]
+        const danger = this.retreatAttacker(t, x, y, target)
+        const [ex, ey, ez] = danger.pos
+        moveGoal = map.coverFrom(x, y, ex, ey, ez + 8, 50) ?? [2 * x - ex, 2 * y - ey]
         boost = me.energy > 15
       } else {
         const dirx = (tp[0] - x) / Math.max(d, 1), diry = (tp[1] - y) / Math.max(d, 1)
@@ -397,6 +399,31 @@ class Brain {
       } else if (nearPick && !losing && nearPickD < (onlyGun ? 60 : 35)) {
         moveGoal = [nearPick[0], nearPick[1]]
         mode += "+weapon"
+      }
+      // Movement can secure an upgrade while aim remains on a real contact.
+      if (!losing && !finishing && map && !zoneGoal && !laserCharging && hpFrac >= 0.55 &&
+          o.alive > 4 && (me.cubes < 6 || onlyGun)) {
+        const betterShot = seen && hasLos && (d < 105 || fire.some(Boolean))
+        const resource = this.combatResource(o, map, target, onlyGun, wantKind, gunS >= 0 && !betterShot)
+        if (resource) {
+          moveGoal = resource.goal
+          boost = false
+          mode = "fight+resource"
+          if (resource.farm && gunS >= 0 && !fire[0] && !fire[1]) {
+            mode += "+shoot"
+            const [cx, cy, cz] = resource.farm.pos
+            const distance = hyp2(x, y, cx, cy)
+            const travel = distance / (me.weapons[gunS]?.stats.speed ?? 252)
+            const px = cx + (resource.farm.vel?.[0] ?? 0) * travel
+            const py = cy + (resource.farm.vel?.[1] ?? 0) * travel
+            aimYaw = Math.atan2(py - y, px - x)
+            aimPitch = Math.atan2(cz + resource.farm.height - muzzleZ, hyp2(x, y, px, py))
+            const tolerance = Math.atan2(1.2, Math.max(1, distance))
+            fire[gunS] = (me.weapons[gunS]?.reload ?? 0) === 0 &&
+              Math.abs(wrap(me.aim[0] - aimYaw)) < tolerance &&
+              Math.abs(me.aim[1] - aimPitch) < tolerance * 2 + 0.02
+          }
+        }
       }
       if (zoneGoal && (!me.in_zone || shrinking)) {
         // zone overrides when outside
@@ -529,7 +556,8 @@ class Brain {
       const gd = hyp2(x, y, moveGoal[0], moveGoal[1])
       const direct = map.los(x, y, z + 2, moveGoal[0], moveGoal[1], map.groundAt(moveGoal[0], moveGoal[1]) + 2)
       if (gd > 3) {
-        const navigating = mode === "zone" || mode === "roam" || mode === "loot" || mode === "heal"
+        const navigating = mode === "zone" || mode === "roam" || mode === "loot" || mode === "heal" ||
+          mode.startsWith("fight+resource")
         const checkGround = navigating && me.grounded && Math.abs(z - map.groundAt(x, y)) < 2
         if (direct && gd < 60 && (!checkGround || map.walkSegment(x, y, moveGoal[0], moveGoal[1]))) {
           mv = [(moveGoal[0] - x) / gd, (moveGoal[1] - y) / gd]
@@ -680,6 +708,87 @@ class Brain {
 
   mapGround(x: number, y: number) {
     return this.map ? this.map.groundAt(x, y) : 0
+  }
+
+  retreatAttacker(t: number, x: number, y: number, target: Track): Track {
+    if (t - (this.attackers.get(target.id) ?? -99) < 3) return target
+    let danger = target
+    let score = Infinity
+    for (const tr of this.tracks.values()) {
+      const hitAge = t - (this.attackers.get(tr.id) ?? -99)
+      const seenAge = t - tr.t
+      if (hitAge > 3 || seenAge > 2) continue
+      const distance = hyp2(x, y, tr.pos[0], tr.pos[1])
+      if (distance > 190) continue
+      const cost = distance + 25 * hitAge + 20 * seenAge
+      if (cost < score) {
+        score = cost
+        danger = tr
+      }
+    }
+    return danger
+  }
+
+  combatResource(o: Observation, map: WorldMap, target: Track, onlyGun: boolean,
+      wantKind: (kind: string) => number | null, canFarm: boolean): CombatResource | null {
+    const me = o.self
+    const [x, y, z] = me.pos
+    const t = o.t
+    if (!me.grounded || t - this.mechHitT < 0.9 || Math.abs(z - map.groundAt(x, y)) > 2) return null
+    for (const actor of o.mechs) {
+      if (actor.kind !== "mech") continue
+      const [ax, ay, az] = actor.pos
+      const distance = hyp2(x, y, ax, ay)
+      if (distance < 37) return null
+      if (distance < 105 && Math.abs(wrap(actor.aim[0] - Math.atan2(y - ay, x - ax))) < 0.34 &&
+          map.los(ax, ay, az + 7, x, y, z + 5)) return null
+    }
+
+    const [tx, ty] = target.pos
+    const threatDistance = hyp2(x, y, tx, ty)
+    let best: CombatResource | null = null
+    const consider = (pos: number[], radius: number, value: number, farm?: FarmTarget) => {
+      const [px, py, pz] = pos
+      const distance = hyp2(x, y, px, py)
+      if (distance > radius || hyp2(px, py, ...o.zone.center) > o.zone.radius - 5) return
+      if (Math.abs(pz - map.groundAt(px, py)) > 2) return
+      const closing = threatDistance - hyp2(px, py, tx, ty)
+      if (threatDistance < 120 && closing > 15) return
+      const score = value - distance - 0.7 * Math.max(0, closing)
+      if (best && best.value >= score) return
+      if (!map.walkSegment(x, y, px, py)) return
+      best = { goal: [px, py], value: score, farm }
+    }
+    for (const item of o.pickups) {
+      if (onlyGun && wantKind(item.kind) !== null) consider(item.pos, 53, 60 + 3 * (WEAPON_PREF[item.kind] ?? 0))
+    }
+    for (const cube of o.cubes) {
+      if (me.cubes < 6) consider(cube.pos, 48, 57)
+    }
+    if (!best && canFarm && me.cubes < 6) {
+      const muzzle = z + (me.stats.muzzle_height ?? 7)
+      for (const crate of o.crates) {
+        const [cx, cy, cz] = crate.pos
+        const distance = hyp2(x, y, cx, cy)
+        if (distance > 70 || !map.los(x, y, muzzle, cx, cy, cz + 1.2)) continue
+        consider(crate.pos, 70, 25, { pos: crate.pos, height: 1.2 })
+      }
+      for (const actor of o.mechs) {
+        if (actor.kind !== "npc") continue
+        const [nx, ny, nz] = actor.pos
+        const distance = hyp2(x, y, nx, ny)
+        if (distance > 55 || !map.los(x, y, muzzle, nx, ny, nz + 1.75)) continue
+        const groundPos = [nx, ny, map.groundAt(nx, ny)]
+        consider(groundPos, 55, 38, { pos: actor.pos, height: 1.75, vel: actor.vel })
+      }
+      if (best) {
+        const resource: CombatResource = best
+        const distance = hyp2(x, y, ...resource.goal)
+        const approach = Math.max(0, 1 - 25 / Math.max(1, distance))
+        resource.goal = [x + (resource.goal[0] - x) * approach, y + (resource.goal[1] - y) * approach]
+      }
+    }
+    return best
   }
 }
 
