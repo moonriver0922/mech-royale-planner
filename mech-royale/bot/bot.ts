@@ -198,6 +198,43 @@ class Brain {
         target = tr
       }
     }
+
+    // Replace an obstructed contact with a visible shot, while preserving open duels.
+    let changedTarget = false
+    if (target && visible.some((contact) => contact.id !== target!.id)) {
+      const clearContact = (track: Track): boolean => {
+        if (track.t !== t) return false
+        const [tx, ty, tz] = track.pos
+        return !map || map.los(x, y, muzzleZ, tx, ty, tz + 4.5 * (1 + 0.05 * track.cubes))
+      }
+      if (!clearContact(target)) {
+        let opportunity: Track | null = null
+        let opportunityScore = Infinity
+        for (const contact of visible) {
+          const track = this.tracks.get(contact.id)
+          if (!track || track.id === target.id || !clearContact(track)) continue
+          const [tx, ty] = track.pos
+          const distance = hyp2(x, y, tx, ty)
+          const angle = Math.abs(wrap(me.aim[0] - Math.atan2(ty - y, tx - x)))
+          const gun = gunS >= 0 ? me.weapons[gunS] : null
+          const laser = laserS >= 0 ? me.weapons[laserS] : null
+          const lightning = lightS >= 0 ? me.weapons[lightS] : null
+          const inRange = (gun && distance < gun.stats.range) ||
+            (laser && distance < laser.stats.range) || (lightning && distance < lightning.stats.range - 1)
+          if (!inRange || angle > 1) continue
+          const attackedUs = t - (this.attackers.get(track.id) ?? -99) < 3
+          const score = distance + (track.hp / 1400) * 90 + 30 * angle - (attackedUs ? 50 : 0)
+          if (score < opportunityScore) {
+            opportunity = track
+            opportunityScore = score
+          }
+        }
+        if (opportunity) {
+          target = opportunity
+          changedTarget = true
+        }
+      }
+    }
     if (target) {
       this.targetId = target.id
       this.targetT = t
@@ -702,7 +739,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""}${changedTarget ? "+open-target" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
     return act
