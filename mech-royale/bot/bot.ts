@@ -255,6 +255,7 @@ class Brain {
     let boost = false
     let jump = false
     let strafe = 0
+    let canReposition = false
     let laserCharging = laserS >= 0 && (me.weapons[laserS]?.charge ?? 0) > 0
 
     if (target) {
@@ -356,6 +357,7 @@ class Brain {
       const theirFrac = theirHp / target.maxHp
       const finishing = theirFrac < 0.2 && hpFrac > 0.2 && threats <= 2
       const losing = !finishing && ((hpFrac < 0.35 && theirFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55) || (threats >= 3 && hpFrac < 0.8))
+      canReposition = target.t === t && !finishing && !target.charging
       if (losing) this.hideUntil = t + 6
       const prefer = lightS >= 0 ? 28 : laserS >= 0 ? 110 : 70
       if (losing && map) {
@@ -666,6 +668,10 @@ class Brain {
       if (this.stuckT > 4) this.stuckT = 0
     }
     if (!me.grounded && this.stuckT > 0) boost = me.energy > 5
+    const laserHeld = laserS >= 0 && fire[laserS]
+    const reposition = canReposition && mode === "fight" && target && map && !zoneGoal && !boost && !jump &&
+      act.take === undefined ? this.fightPosition(o, map, target, visible, mv, laserCharging, laserHeld) : null
+    if (reposition) mv = reposition
     const rotation = target && map && zoneGoal && shrinking && me.in_zone && !jump && !this.combatStep &&
       !mode.endsWith("+dodge") ? this.safeRotation(o, map, visible, mv, boost, laserCharging, moveGoal, mode, act.take) : null
     if (rotation) mv = rotation
@@ -702,7 +708,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""}${reposition ? "+position" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
     return act
@@ -710,6 +716,120 @@ class Brain {
 
   mapGround(x: number, y: number) {
     return this.map ? this.map.groundAt(x, y) : 0
+  }
+
+  fightPosition(o: Observation, map: WorldMap, target: Track, visible: ActorObs[],
+      move: [number, number], charging: boolean, laserHeld: boolean): [number, number] | null {
+    const me = o.self
+    const [x, y, z] = me.pos
+    if (!me.grounded || !map.walk[map.cellOf(x, y)] || Math.abs(z - map.groundAt(x, y)) > 1 ||
+        Math.hypot(...move) < 0.9) return null
+
+    const step = 0.2
+    const horizon = 2 * step
+    const speed = (me.stats.walk_speed ?? 11.7) * (charging || laserHeld ? (me.stats.charge_move_mult ?? 0.5) : 1)
+    const accel = (me.stats.ground_accel ?? 58.5) * step
+    const muzzleHeight = me.stats.muzzle_height ?? 7
+    const chestHeight = (me.stats.height ?? 9) / 2
+    const targetChest = target.pos[2] + 4.5 * (1 + 0.05 * target.cubes)
+    const contacts = visible.flatMap(actor => {
+      const [ax, ay, az] = actor.pos
+      const distance = hyp2(x, y, ax, ay)
+      const attacked = o.t - (this.attackers.get(actor.id) ?? -99) < 1.5
+      const facing = Math.abs(wrap(actor.aim[0] - Math.atan2(y - ay, x - ax)))
+      if (!attacked && facing > 0.3) return []
+      const weapons = actor.weapons ?? ["gun"]
+      const range = Math.max(0, ...weapons.map(kind => kind === "mortar" ? 0 : (this.cfg.weapons[kind]?.range ?? 0)))
+      if (range <= 0 || distance > range + horizon * (speed + Math.hypot(actor.vel[0], actor.vel[1]))) return []
+      const muzzle = az + (this.cfg.mech.muzzle_height ?? 7) * (1 + 0.05 * (actor.cubes ?? 0))
+      if (!attacked && (distance > range || !map.los(ax, ay, muzzle, x, y, z + chestHeight))) return []
+      return [{ actor, range, muzzle, weight: actor.id === target.id ? 1 : 2, priority: distance - (attacked ? 80 : 0) }]
+    }).sort((a, b) => a.priority - b.priority).slice(0, 3)
+    if (!contacts.length) return null
+    const otherAttackers = contacts.reduce((mask, contact, index) =>
+      contact.actor.id === target.id ? mask : mask | (1 << index), 0)
+
+    // A movement option is useful only if a direct-fire weapon can actually be ready at that point.
+    const firingRange = (seconds: number) => {
+      let range = 0
+      for (const weapon of me.weapons) {
+        if (!weapon || weapon.kind === "mortar" || weapon.cooldown > seconds) continue
+        if (weapon.kind === "gun" && ((weapon.reload ?? 0) > seconds ||
+            ((weapon.ammo ?? 1) <= 0 && !weapon.reload))) continue
+        if (weapon.kind === "laser" && ((!charging && !laserHeld) ||
+            weapon.cooldown + weapon.stats.charge - (weapon.charge ?? 0) - 0.05 > seconds)) continue
+        if (weapon.kind === "lightning" && me.energy <= weapon.stats.energy + 2) continue
+        range = Math.max(range, weapon.stats.range - (weapon.kind === "lightning" ? 1 : 0))
+      }
+      return range
+    }
+    const samples = [step, horizon].map(seconds => ({
+      seconds,
+      tx: target.pos[0] + target.vel[0] * seconds,
+      ty: target.pos[1] + target.vel[1] * seconds,
+      tz: targetChest + target.vel[2] * seconds,
+      range: firingRange(seconds),
+    }))
+    const project = (heading: [number, number]) => {
+      let px = x, py = y
+      let [vx, vy] = me.vel
+      const exposure = []
+      let shots = 0, pressure = 0
+      for (const sample of samples) {
+        const dx = heading[0] * speed - vx, dy = heading[1] * speed - vy
+        const ramp = Math.min(1, accel / (Math.hypot(dx, dy) || 1))
+        const nx = px + (vx + dx * ramp / 2) * step, ny = py + (vy + dy * ramp / 2) * step
+        if (!map.walkSegment(px, py, nx, ny) || hyp2(nx, ny, ...o.zone.center) > o.zone.radius - 2) return null
+        px = nx
+        py = ny
+        vx += dx * ramp
+        vy += dy * ramp
+        const ground = map.groundAt(px, py)
+        const distance = hyp2(px, py, sample.tx, sample.ty)
+        const yaw = Math.atan2(sample.ty - py, sample.tx - px)
+        const pitch = Math.atan2(sample.tz - ground - muzzleHeight, distance)
+        shots <<= 1
+        if (distance < sample.range && pitch >= (me.stats.min_pitch ?? -0.7) && pitch <= (me.stats.max_pitch ?? 1.3) &&
+            Math.abs(wrap(yaw - me.aim[0])) <= (me.stats.turn_rate ?? 4) * sample.seconds + 0.05 &&
+            Math.abs(pitch - me.aim[1]) <= (me.stats.pitch_rate ?? 3) * sample.seconds + 0.05 &&
+            map.los(px, py, ground + muzzleHeight, sample.tx, sample.ty, sample.tz)) shots |= 1
+        let shooters = 0
+        for (const [index, { actor, range, muzzle, weight }] of contacts.entries()) {
+          const ax = actor.pos[0] + actor.vel[0] * sample.seconds
+          const ay = actor.pos[1] + actor.vel[1] * sample.seconds
+          if (hyp2(px, py, ax, ay) <= range &&
+              map.los(ax, ay, muzzle + actor.vel[2] * sample.seconds, px, py, ground + chestHeight)) {
+            shooters |= 1 << index
+            pressure += weight
+          }
+        }
+        exposure.push(shooters)
+      }
+      return { exposure, shots, pressure }
+    }
+
+    const current = project(move)
+    if (!current) return null
+    const angle = Math.atan2(move[1], move[0])
+    let best = current
+    let chosen: [number, number] | null = null
+    // Only turn to break an established line of fire. During a shooting window, screen the
+    // other attackers while preserving the shot at our current target.
+    for (const turn of [30, -30, 60, -60]) {
+      const bearing = angle + turn * Math.PI / 180
+      const heading: [number, number] = [Math.cos(bearing), Math.sin(bearing)]
+      const route = project(heading)
+      if (!route || (route.shots & current.shots) !== current.shots) continue
+      const [near, far] = route.exposure
+      const screened = current.exposure[1] & ~far
+      if (!screened || (current.shots && !(screened & otherAttackers)) ||
+          (near & ~current.exposure[0]) || (far & ~current.exposure[1])) continue
+      if (route.pressure < best.pressure || (route.pressure === best.pressure && route.shots > best.shots)) {
+        best = route
+        chosen = heading
+      }
+    }
+    return chosen
   }
 
   safeRotation(o: Observation, map: WorldMap, visible: ActorObs[], move: [number, number],
