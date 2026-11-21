@@ -34,6 +34,7 @@ class Brain {
   rng: () => number
   lastHp = 0
   scanPhase = 0
+  scanDir = 1
   laserHold = false
   attackers = new Map<number, number>() // id -> last time they hit us
   hideUntil = 0
@@ -200,10 +201,14 @@ class Brain {
       this.targetT = t
     }
     const npcs = o.mechs.filter((m) => m.kind === "npc")
-    for (const n of npcs) this.npcMem.set(n.id, { pos: n.pos, vel: n.vel, t, hp: n.hp ?? 350 })
+    // Apply hits to estimates before replacing them with the observed current HP.
     for (const e of o.events) if (e.type === "hit" && e.target >= 100 && e.target < 1000) {
       const nm = this.npcMem.get(e.target)
       if (nm) nm.hp -= e.amount
+    }
+    for (const n of npcs) {
+      const estimatedHp = Math.max(1, this.npcMem.get(n.id)?.hp ?? 350)
+      this.npcMem.set(n.id, { pos: n.pos, vel: n.vel, t, hp: n.hp ?? estimatedHp })
     }
     for (const [id, nm] of this.npcMem) if (t - nm.t > 25 || nm.hp <= 0) this.npcMem.delete(id)
     for (const c of o.cubes) {
@@ -248,6 +253,7 @@ class Brain {
     let wantAim = false
     let mode = "roam"
     const fire: [boolean, boolean] = [false, false]
+    let gunOnTarget = false
     const hpFrac = me.hp / me.max_hp
     let boost = false
     let jump = false
@@ -280,44 +286,43 @@ class Brain {
       }
       const instant = (): [number, number] => [Math.atan2(tp[1] - y, tp[0] - x), Math.atan2(tcz - muzzleZ, d)]
 
-      // pick weapon emphasis
-      let a: [number, number]
-      const gunSpeed = gunS >= 0 ? me.weapons[gunS]!.stats.speed : 252
-      if (lightS >= 0 && d < (me.weapons[lightS]!.stats.range ?? 45) * 1.1) a = instant()
-      else if (laserS >= 0 && (laserCharging || (me.weapons[laserS]!.cooldown ?? 0) < 0.2)) a = instant()
-      else a = aimFor(gunSpeed)
-      aimYaw = a[0]
-      aimPitch = a[1]
-      wantAim = true
-      const yawErr = Math.abs(wrap(me.aim[0] - aimYaw))
-      const pitchErr = Math.abs(me.aim[1] - aimPitch)
+      const actionSeconds = this.cfg.match.decide_every / this.cfg.match.tick_hz
       const tol = Math.atan2(2.2 * tScale, Math.max(d, 1))
+      const gun = me.weapons[gunS]
+      const laser = me.weapons[laserS]
+      const lightning = me.weapons[lightS]
+      const gunAim = aimFor(gun?.stats.speed ?? 252)
+      const directAim = instant()
+      const startLaser = laser && laser.cooldown <= 0.05 && seen && d < laser.stats.range && (hasLos || d < 60)
+      const lightningReady = lightning && seen && hasLos && lightning.cooldown <= actionSeconds &&
+        d < lightning.stats.range - 1 && me.energy > lightning.stats.energy + 2
 
-      if (seen && hasLos) {
-        // gun
-        if (gunS >= 0) {
-          const g = me.weapons[gunS]!
-          const ga = aimFor(g.stats.speed)
-          const gErr = Math.abs(wrap(me.aim[0] - ga[0]))
-          if (d < g.stats.range && gErr < tol * 1.2 && pitchErr < tol * 2 + 0.03 && (g.reload ?? 0) === 0) fire[gunS] = true
-        }
-        // lightning
-        if (lightS >= 0) {
-          const L = me.weapons[lightS]!
-          if (d < L.stats.range - 1 && yawErr < ((L.stats.cone_deg * Math.PI) / 180) * 0.45 && me.energy > L.stats.energy + 2) fire[lightS] = true
-        }
+      // Both weapons use the same torso. Allow a gun shot only if the current and
+      // requested angles are both inside the gun's own aiming window.
+      const requestedAim = laserCharging || startLaser || lightningReady ? directAim : gunAim
+      ;[aimYaw, aimPitch] = requestedAim
+      wantAim = true
+      const aligned = (from: readonly number[], to: readonly number[], yawTol: number, pitchTol: number) =>
+        Math.abs(wrap(from[0] - to[0])) < yawTol && Math.abs(from[1] - to[1]) < pitchTol
+
+      gunOnTarget = !!gun && seen && hasLos && d < gun.stats.range &&
+        aligned(me.aim, gunAim, tol * 1.2, tol * 2 + 0.03)
+      if (gun && gunOnTarget && gun.cooldown <= actionSeconds && (gun.reload ?? 0) === 0 &&
+          (gun.ammo ?? 1) > 0 && aligned(requestedAim, gunAim, tol * 1.2, tol * 2 + 0.03)) {
+        fire[gunS] = true
       }
-      // laser: charge while target is around, release when full and aligned
-      if (laserS >= 0) {
-        const Lw = me.weapons[laserS]!
-        const full = Lw.stats.charge
-        const ch = Lw.charge ?? 0
-        if (ch > 0) {
-          const ready = ch >= full - 0.05
-          const aligned = seen && hasLos && yawErr < tol * 0.9 && pitchErr < tol * 1.5 + 0.02
-          if (ready && aligned) fire[laserS] = false
-          else fire[laserS] = true
-        } else if (Lw.cooldown <= 0.05 && seen && d < Lw.stats.range && (hasLos || d < 60)) {
+      if (lightning && lightningReady) {
+        const yawTol = (lightning.stats.cone_deg * Math.PI) / 180 * 0.45
+        fire[lightS] = Math.abs(wrap(me.aim[0] - directAim[0])) < yawTol
+      }
+      if (laser) {
+        const charge = laser.charge ?? 0
+        if (charge > 0) {
+          const release = charge >= laser.stats.charge - 0.05 && seen && hasLos &&
+            aligned(me.aim, directAim, tol * 0.9, tol * 1.5 + 0.02)
+          // Releasing the trigger fires a charged laser, so hold until aligned.
+          fire[laserS] = !release
+        } else if (startLaser) {
           fire[laserS] = true
         }
       }
@@ -464,11 +469,14 @@ class Brain {
         if (hpFrac > 0.5) {
           for (const nm of this.npcMem.values()) {
             const d = hyp2(x, y, nm.pos[0], nm.pos[1])
-            if (d > 170) continue
+            // An absent nearby drone may already have moved or been destroyed.
+            if (d > 170 || (d <= 38 && nm.t !== t)) continue
             const sc = d - 20
             if (sc < bs) {
               bs = sc
-              best = d > 38 ? [nm.pos[0], nm.pos[1]] : [x, y]
+              const [nx, ny, nz] = nm.pos
+              const inFiringPosition = d <= 38 && map?.los(x, y, muzzleZ, nx, ny, nz + 1.75) !== false
+              best = inFiringPosition ? [x, y] : [nx, ny]
             }
           }
         }
@@ -516,7 +524,6 @@ class Brain {
             if (gunS >= 0) fire[gunS] = true
             if (lightS >= 0 && dd < 40) fire[lightS] = true
           }
-          if (!npc && crate && dd < 25) moveGoal = [crate.pos[0], crate.pos[1]]
           mode += "+shoot"
         }
       }
@@ -528,7 +535,9 @@ class Brain {
       const gd = hyp2(x, y, moveGoal[0], moveGoal[1])
       const direct = map.los(x, y, z + 2, moveGoal[0], moveGoal[1], map.groundAt(moveGoal[0], moveGoal[1]) + 2)
       if (gd > 3) {
-        const navigating = mode === "zone" || mode === "roam" || mode === "loot" || mode === "heal"
+        const movementMode = mode.split("+", 1)[0]
+        const navigating = movementMode === "zone" || movementMode === "roam" ||
+          movementMode === "loot" || movementMode === "heal"
         const checkGround = navigating && me.grounded && Math.abs(z - map.groundAt(x, y)) < 2
         if (direct && gd < 60 && (!checkGround || map.walkSegment(x, y, moveGoal[0], moveGoal[1]))) {
           mv = [(moveGoal[0] - x) / gd, (moveGoal[1] - y) / gd]
@@ -601,7 +610,8 @@ class Brain {
     }
     // stuck handling: jump + jet
     const moved = hyp2(x, y, this.lastPos[0], this.lastPos[1])
-    if ((mv[0] || mv[1]) && moved < 0.25 && me.grounded) this.stuckT += 0.1
+    if (!mv[0] && !mv[1]) this.stuckT = 0
+    else if (moved < 0.25 && me.grounded) this.stuckT += 0.1
     else if (moved > 0.6) this.stuckT = 0
     if (this.stuckT > 0.6) {
       jump = true
@@ -615,12 +625,53 @@ class Brain {
     if (!me.grounded && this.stuckT > 0) boost = me.energy > 5
     this.lastPos = [x, y, z]
 
+    // Keep walking along the roaming ring when the ordinary waypoint is reached.
+    if (mode === "roam" && !wantAim && moveGoal && !mv[0] && !mv[1] &&
+        !boost && !jump && !laserCharging && t - this.threatT >= 3 && t - this.mechHitT >= 2 &&
+        me.in_zone && me.grounded && map && Math.abs(z - map.groundAt(x, y)) < 2) {
+      const [cx, cy] = zn.next_center
+      const bearing = Math.atan2(y - cy, x - cx)
+      let scanGoal: [number, number] | null = null
+      if (map.walk[map.cellOf(x, y)]) {
+        const ringRadius = hyp2(cx, cy, moveGoal[0], moveGoal[1])
+        for (const direction of [this.scanDir, -this.scanDir]) {
+          const angle = bearing + direction * 0.45
+          const px = cx + Math.cos(angle) * ringRadius
+          const py = cy + Math.sin(angle) * ringRadius
+          if (hyp2(x, y, px, py) <= 3 || hyp2(px, py, zn.center[0], zn.center[1]) > curR - 4 ||
+              ringRadius > zn.next_radius - 4 || !map.walkSegment(x, y, px, py)) continue
+          scanGoal = [px, py]
+          this.scanDir = direction
+          break
+        }
+      } else {
+        // A conservative grid cell can be blocked even when the mech is touching open ground.
+        // Take a short step out along a legal ground segment before following the ring again.
+        for (let i = 0; i < 16; i++) {
+          const angle = bearing + this.scanDir * (Math.PI / 2 + i * TAU / 16)
+          const px = x + Math.cos(angle) * 5
+          const py = y + Math.sin(angle) * 5
+          if (hyp2(px, py, zn.center[0], zn.center[1]) > curR - 4 ||
+              hyp2(px, py, cx, cy) > zn.next_radius - 4 ||
+              !map.clearGroundExit(x, y, px, py, me.stats)) continue
+          scanGoal = [px, py]
+          break
+        }
+      }
+      if (scanGoal) {
+        const walkFraction = Math.min(0.4, 0.95 * this.cfg.sound.step_speed / speed)
+        const distance = hyp2(x, y, scanGoal[0], scanGoal[1])
+        mv = [(scanGoal[0] - x) * walkFraction / distance, (scanGoal[1] - y) * walkFraction / distance]
+        mode += "+scan-walk"
+      }
+    }
+
     // ---------- aim when idle: look along move or toward threats
     if (!wantAim) {
       if (t < 3) aimYaw = me.aim[0] + 1.6
       else if (t - this.mechHitT < 2) aimYaw = this.mechHitBearing
       else if (this.threatBearing !== null && t - this.threatT < 3) aimYaw = this.threatBearing
-      else if (mv[0] || mv[1]) {
+      else if (mode !== "roam+scan-walk" && (mv[0] || mv[1])) {
         this.scanPhase += 0.1
         aimYaw = Math.atan2(mv[1], mv[0]) + Math.sin(this.scanPhase * 1.3) * 0.9
       } else {
@@ -629,15 +680,12 @@ class Brain {
       }
       aimPitch = 0
     }
-    // keep laser charging when target briefly lost
-    if (laserS >= 0 && laserCharging && !fire[laserS]) {
-      const Lw = me.weapons[laserS]!
-      if ((Lw.charge ?? 0) < Lw.stats.charge - 0.05) fire[laserS] = true
-    }
+    // Losing a target is not a reason to release the beam at the scanning angle.
+    if (!target && laserS >= 0 && laserCharging) fire[laserS] = true
     // reload when safe
     if (gunS >= 0 && mode !== "fight") {
       const g = me.weapons[gunS]!
-      if ((g.ammo ?? 12) < g.stats.mag * 0.5 && (g.reload ?? 0) === 0 && !fire[gunS]) act.reload = true
+      if ((g.ammo ?? 12) < g.stats.mag * 0.5 && (g.reload ?? 0) === 0 && !fire[gunS] && !gunOnTarget) act.reload = true
     }
 
     const pmin = me.stats.min_pitch ?? -0.7, pmax = me.stats.max_pitch ?? 1.3

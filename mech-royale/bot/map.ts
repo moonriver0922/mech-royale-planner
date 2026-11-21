@@ -171,6 +171,48 @@ export class WorldMap {
     return true
   }
 
+  // Test a short exit from a conservative blocked cell using the finer terrain raster.
+  clearGroundExit(x: number, y: number, gx: number, gy: number, stats: Record<string, number>) {
+    if (!this.walk[this.cellOf(gx, gy)]) return false
+    const dx = gx - x, dy = gy - y
+    const length = Math.hypot(dx, dy)
+    if (length === 0) return false
+    const radius = (stats.radius ?? 2.5) + Math.SQRT1_2
+    const height = stats.height ?? 9
+    const stepUp = stats.step_up ?? 1.2
+    const slope = Math.tan((stats.max_slope_deg ?? 50) * Math.PI / 180)
+    const samples = Math.ceil(length * 2)
+    let ground = this.groundAt(x, y), floor = ground, ceiling = ground + height
+    for (let i = 1; i <= samples; i++) {
+      const f = i / samples
+      const nextGround = this.groundAt(x + f * dx, y + f * dy)
+      if (Math.abs(nextGround - ground) > Math.min(stepUp, slope * length / samples)) return false
+      ground = nextGround
+      floor = Math.min(floor, ground)
+      ceiling = Math.max(ceiling, ground + height)
+    }
+
+    const left = Math.ceil(Math.min(x, gx) - radius - this.minX)
+    const right = Math.floor(Math.max(x, gx) + radius - this.minX)
+    const bottom = Math.ceil(Math.min(y, gy) - radius - this.minY)
+    const top = Math.floor(Math.max(y, gy) + radius - this.minY)
+    if (left < 0 || right >= this.nx || bottom < 0 || top >= this.ny) return false
+    const radiusSq = radius * radius
+    for (let j = bottom; j <= top; j++) {
+      for (let i = left; i <= right; i++) {
+        const k = j * this.nx + i
+        if (this.top[k] <= floor + stepUp || this.base[k] >= ceiling) continue
+        const ox = this.minX + i - x, oy = this.minY + j - y
+        const along = ox * dx + oy * dy
+        // A solid already overlapping the start margin is safe only if moving straight away.
+        if (along <= 0) continue
+        const f = Math.min(1, along / (length * length))
+        if ((ox - f * dx) ** 2 + (oy - f * dy) ** 2 < radiusSq) return false
+      }
+    }
+    return true
+  }
+
   // Time-sliced Dijkstra (8-conn) distance field from a goal. field() requests a goal,
   // pump() spends a bounded amount of time on it; steer() reads the last finished field.
   work!: Float32Array
