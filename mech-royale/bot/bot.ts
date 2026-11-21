@@ -549,6 +549,10 @@ class Brain {
       let dx = 0, dy = 0, urgent = false
       const cz = z + 4.5 * scale
       const mg = this.cfg.weapons.mortar.gravity ?? 22
+      // Extrapolate current horizontal velocity only when the next command maintains it.
+      const plannedSpeed = me.grounded && boost ? (me.stats.boost_speed ?? 19.5) : speed
+      const movementDelta = Math.hypot(mv[0] * plannedSpeed - me.vel[0], mv[1] * plannedSpeed - me.vel[1])
+      const useMovingFrame = Math.hypot(me.vel[0], me.vel[1]) > 3 && movementDelta <= 5
       for (const p of o.projectiles) {
         const [px, py, pz] = p.pos
         const [vx, vy, vz] = p.vel
@@ -569,18 +573,23 @@ class Brain {
           }
           continue
         }
-        const rx = x - px, ry = y - py, rz = cz - pz
-        const vv = vx * vx + vy * vy + vz * vz
+        const zWeight = useMovingFrame ? 0.5 : 1
+        const rx = x - px, ry = y - py, rz = (cz - pz) * zWeight
+        const dvx = vx - (useMovingFrame ? me.vel[0] : 0)
+        const dvy = vy - (useMovingFrame ? me.vel[1] : 0)
+        const dvz = (vz - (useMovingFrame ? me.vel[2] : 0)) * zWeight
+        const vv = dvx * dvx + dvy * dvy + dvz * dvz
         if (vv < 1) continue
-        const tc = (rx * vx + ry * vy + rz * vz) / vv
+        const tc = (rx * dvx + ry * dvy + rz * dvz) / vv
         if (tc < 0 || tc > 0.9) continue
-        const mx = px + vx * tc - x, my = py + vy * tc - y, mz = pz + vz * tc - cz
-        const miss = Math.hypot(mx, my, mz * 0.5)
-        if (miss > 3.6 * scale) continue
-        // move perpendicular to the bullet path, away from its closest point
-        const hv = Math.hypot(vx, vy) || 1
-        let nx = -vy / hv, ny = vx / hv
-        if (nx * -mx + ny * -my < 0) {
+        const mx = dvx * tc - rx, my = dvy * tc - ry, mz = dvz * tc - rz
+        if (Math.hypot(mx, my, mz * (useMovingFrame ? 1 : 0.5)) > 3.6 * scale) continue
+        // Move away from the projected impact point, or follow the current plan for a centerline shot.
+        const hv = Math.hypot(dvx, dvy) || 1
+        let nx = -dvy / hv, ny = dvx / hv
+        const side = -nx * mx - ny * my
+        const centerline = useMovingFrame && Math.abs(side) <= 0.1
+        if (centerline ? nx * mv[0] + ny * mv[1] < 0 : side < 0) {
           nx = -nx
           ny = -ny
         }
