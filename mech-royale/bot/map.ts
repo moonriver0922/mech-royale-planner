@@ -14,6 +14,7 @@ export class WorldMap {
   nnx = 0
   nny = 0
   walk!: Uint8Array
+  region!: Int32Array
   dist!: Float32Array
   heap!: Int32Array
   goalKey = ""
@@ -35,6 +36,7 @@ export class WorldMap {
     this.base = new Float32Array(n).fill(1e9)
     for (const p of world.prisms) this.raster(p)
     this.buildNav()
+    this.labelGroundRegions()
   }
 
   private raster(p: any) {
@@ -154,6 +156,61 @@ export class WorldMap {
     return J * this.nnx + I
   }
 
+  // Four-neighbour regions match our eight-neighbour routes because a diagonal
+  // is allowed only when both orthogonal neighbours can be traversed.
+  private labelGroundRegions() {
+    const W = this.nnx, walk = this.walk, region = new Int32Array(walk.length)
+    const queue = this.heap
+    let id = 0
+    for (let start = 0; start < walk.length; start++) {
+      if (!walk[start] || region[start]) continue
+      let head = 0, tail = 1
+      queue[0] = start
+      region[start] = ++id
+      while (head < tail) {
+        const k = queue[head++]
+        // The navigation raster pads each arena boundary with non-walkable cells.
+        for (const n of [k - 1, k + 1, k - W, k + W]) {
+          if (!walk[n] || region[n]) continue
+          region[n] = id
+          queue[tail++] = n
+        }
+      }
+    }
+    this.region = region
+  }
+
+  // Keep the radial waypoint when possible. Otherwise choose nearby floor
+  // in the same region as the avatar, inside the announced next circle.
+  zoneWaypoint(x: number, y: number, goal: [number, number], center: number[], radius: number): [number, number] {
+    const origin = this.region[this.cellOf(x, y)]
+    const goalCell = this.cellOf(goal[0], goal[1])
+    if (!origin || this.region[goalCell] === origin || radius <= 0) return goal
+    const W = this.nnx
+    const seed = this.groundSeed(goalCell)
+    const sx = this.minX + 2 * (seed % W), sy = this.minY + 2 * Math.floor(seed / W)
+    if (this.region[seed] === origin && Math.hypot(sx - center[0], sy - center[1]) <= radius) return goal
+    const col = goalCell % W, row = Math.floor(goalCell / W)
+    const span = Math.ceil(Math.min(64, 1.5 * radius + 2) / 2)
+    const radius2 = radius * radius
+    let best: [number, number] = goal, bestDistance = Infinity, bestApproach = Infinity
+    for (let j = Math.max(0, row - span); j <= Math.min(this.nny - 1, row + span); j++) {
+      const py = this.minY + 2 * j
+      for (let i = Math.max(0, col - span); i <= Math.min(W - 1, col + span); i++) {
+        if (this.region[j * W + i] !== origin) continue
+        const px = this.minX + 2 * i
+        const distance = (px - goal[0]) ** 2 + (py - goal[1]) ** 2
+        if (distance > bestDistance || (px - center[0]) ** 2 + (py - center[1]) ** 2 > radius2) continue
+        const approach = (x - px) ** 2 + (y - py) ** 2
+        if (distance === bestDistance && approach >= bestApproach) continue
+        best = [px, py]
+        bestDistance = distance
+        bestApproach = approach
+      }
+    }
+    return best
+  }
+
   walkSegment(x: number, y: number, gx: number, gy: number) {
     let prev = this.cellOf(x, y)
     // Let normal steering move the avatar out of conservatively blocked start cells.
@@ -180,20 +237,9 @@ export class WorldMap {
   pendingGoal: [number, number] = [0, 0]
   readyGoal: [number, number] | null = null
 
-  field(gx: number, gy: number) {
-    const key = `${Math.round(gx / 5)},${Math.round(gy / 5)}`
-    if (key === this.pendingKey) return
-    if (!this.pendingKey && key === this.goalKey) return
-    // don't thrash: if a computation is running for a nearby goal, let it finish
-    if (this.pendingKey && Math.hypot(gx - this.pendingGoal[0], gy - this.pendingGoal[1]) < 25) return
+  // The field chooses this cell when its requested coordinates are obstructed.
+  private groundSeed(g: number) {
     const W = this.nnx, H = this.nny, walk = this.walk
-    if (!this.work) {
-      this.work = new Float32Array(this.dist.length)
-      this.hk = new Float32Array(this.heap.length)
-    }
-    this.work.fill(1e9)
-    this.hn = 0
-    let g = this.cellOf(gx, gy)
     if (!walk[g]) {
       let best = -1, bd = 1e9
       const gi = g % W, gj = (g / W) | 0
@@ -210,6 +256,22 @@ export class WorldMap {
           }
       if (best >= 0) g = best
     }
+    return g
+  }
+
+  field(gx: number, gy: number) {
+    const key = `${Math.round(gx / 5)},${Math.round(gy / 5)}`
+    if (key === this.pendingKey) return
+    if (!this.pendingKey && key === this.goalKey) return
+    // don't thrash: if a computation is running for a nearby goal, let it finish
+    if (this.pendingKey && Math.hypot(gx - this.pendingGoal[0], gy - this.pendingGoal[1]) < 25) return
+    if (!this.work) {
+      this.work = new Float32Array(this.dist.length)
+      this.hk = new Float32Array(this.heap.length)
+    }
+    this.work.fill(1e9)
+    this.hn = 0
+    const g = this.groundSeed(this.cellOf(gx, gy))
     this.work[g] = 0
     this.push(g, 0)
     this.pendingKey = key

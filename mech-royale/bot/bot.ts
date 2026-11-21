@@ -426,7 +426,9 @@ class Brain {
     if (!moveGoal && !healing) {
       if (zoneGoal) {
         mode = mode === "fight" ? "fight-zone" : "zone"
-        moveGoal = zoneGoal
+        moveGoal = mode === "zone" && map
+          ? map.zoneWaypoint(x, y, zoneGoal, zn.next_center, zn.next_radius)
+          : zoneGoal
         boost = !me.in_zone && me.energy > 20
       } else if (mode !== "fight") {
         // loot: pickups worth taking, then crates/cubes, then NPCs
