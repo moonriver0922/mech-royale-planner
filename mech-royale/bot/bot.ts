@@ -222,6 +222,29 @@ class Brain {
         nearCube = c.pos
       }
     }
+    // Give a nearby reachable resource a short opening window while contact is distant.
+    let farmingUnderContact = false
+    if (target && map && t < 50 && me.cubes < 4 && me.in_zone && me.grounded && gunS >= 0 &&
+        me.hp >= me.max_hp * 0.65 && t - this.mechHitT > 1.8 && Math.abs(z - map.groundAt(x, y)) < 2) {
+      const immediateContact = visible.some((m) => {
+        const distance = hyp2(x, y, m.pos[0], m.pos[1])
+        if (distance <= 40) return true
+        if (distance > 95 || !map.los(m.pos[0], m.pos[1], m.pos[2] + 7, x, y, z + 4.5 * scale)) return false
+        return Math.abs(wrap(m.aim[0] - Math.atan2(y - m.pos[1], x - m.pos[0]))) < 0.35
+      })
+      const reachable = ([rx, ry, rz]: number[], reach: number) =>
+        hyp2(x, y, rx, ry) <= reach && Math.abs(rz - map.groundAt(rx, ry)) < 2 && map.walkSegment(x, y, rx, ry)
+      const canFinishTarget = target.hp < 110 && hyp2(x, y, target.pos[0], target.pos[1]) < 100
+      if (!immediateContact && !canFinishTarget && (
+        o.cubes.some((c) => reachable(c.pos, 55)) ||
+        o.crates.some((c) => reachable(c.pos, 50)) ||
+        npcs.some((n) => reachable(n.pos, 52)) ||
+        onlyGun && o.pickups.some((p) => wantKind(p.kind) !== null && reachable(p.pos, 45))
+      )) {
+        target = null
+        farmingUnderContact = true
+      }
+    }
     let threats = 0
     for (const tr of this.tracks.values()) if (t - tr.t < 3 && hyp2(x, y, tr.pos[0], tr.pos[1]) < 160) threats++
 
@@ -646,7 +669,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${farmingUnderContact ? "+opening-resource" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     void visible
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
