@@ -1048,9 +1048,14 @@ func (b *Brain) step(o *Obs, act *Action) {
 	if len(me.Weapons) > 1 && me.Weapons[1] != nil {
 		slot1 = me.Weapons[1].Kind
 	}
+	pickupRadius, pickupHeight := b.Cfg.Loot.PickupRadius-0.3, 3.6
+	if len(me.Weapons) == 2 && me.Weapons[1] == nil {
+		// An unsuccessful take into an empty slot leaves our equipped gun alone.
+		pickupRadius, pickupHeight = b.Cfg.Loot.PickupRadius, 4
+	}
 	for i := range o.Pickups {
 		p := &o.Pickups[i]
-		if hyp(p.Pos[0]-x, p.Pos[1]-y) > b.Cfg.Loot.PickupRadius-0.3 || math.Abs(p.Pos[2]-zf) > 3.6 {
+		if hyp(p.Pos[0]-x, p.Pos[1]-y) > pickupRadius || math.Abs(p.Pos[2]-zf) > pickupHeight {
 			continue
 		}
 		if !b.wantPickup(me, p.Kind) {
