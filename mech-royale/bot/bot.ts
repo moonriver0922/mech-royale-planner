@@ -666,6 +666,9 @@ class Brain {
       if (this.stuckT > 4) this.stuckT = 0
     }
     if (!me.grounded && this.stuckT > 0) boost = me.energy > 5
+    const rotation = target && map && zoneGoal && shrinking && me.in_zone && !jump && !this.combatStep &&
+      !mode.endsWith("+dodge") ? this.safeRotation(o, map, visible, mv, boost, laserCharging, moveGoal, mode, act.take) : null
+    if (rotation) mv = rotation
     this.lastPos = [x, y, z]
 
     // ---------- aim when idle: look along move or toward threats
@@ -699,8 +702,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
-    void visible
+    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
     return act
@@ -708,6 +710,103 @@ class Brain {
 
   mapGround(x: number, y: number) {
     return this.map ? this.map.groundAt(x, y) : 0
+  }
+
+  safeRotation(o: Observation, map: WorldMap, visible: ActorObs[], move: [number, number],
+      boost: boolean, charging: boolean, goal: [number, number] | null, mode: string,
+      taking: BotAction["take"]): [number, number] | null {
+    const me = o.self
+    const zone = o.zone
+    const [x, y, z] = me.pos
+    const remaining = zone.shrink_end - o.t
+    const nextDistance = hyp2(x, y, ...zone.next_center)
+    if (remaining <= 0 || !me.grounded || Math.abs(z - map.groundAt(x, y)) >= 2 ||
+        !map.walk[map.cellOf(x, y)] || nextDistance <= zone.next_radius - 2) return null
+
+    const walk = me.stats.walk_speed ?? 11.7
+    const run = me.stats.boost_speed ?? 19.5
+    const drain = me.stats.boost_drain ?? 17
+    const chargeScale = charging ? (me.stats.charge_move_mult ?? 0.5) : 1
+    const step = 0.3
+    const maxVelocityChange = (me.stats.ground_accel ?? 58.5) * step
+    const approachingWeapon = mode.endsWith("+weapon")
+    const resource = approachingWeapon ? o.pickups : mode.endsWith("+cube") ? o.cubes : []
+    const pickup = resource.find(item => goal && item.pos[0] === goal[0] && item.pos[1] === goal[1])
+    // A take command for this goal completes the approach this tick, before the first simulated step.
+    if (approachingWeapon && pickup && pickup.id === taking) return null
+    const radius = approachingWeapon ? this.cfg.loot.pickup_radius - 0.3 : this.cfg.cubes.pickup_radius
+    const distanceFromEdge = (px: number, py: number, seconds: number) => {
+      const fraction = Math.min(1, seconds / remaining)
+      const cx = zone.center[0] + (zone.next_center[0] - zone.center[0]) * fraction
+      const cy = zone.center[1] + (zone.next_center[1] - zone.center[1]) * fraction
+      const radius = zone.radius + (zone.next_radius - zone.radius) * fraction
+      return radius - hyp2(px, py, cx, cy)
+    }
+    const simulate = (heading: [number, number], collect = false) => {
+      let [px, py] = me.pos
+      let [vx, vy] = me.vel
+      let margin = Infinity
+      const points: [number, number][] = []
+      for (let i = 1; i <= 4; i++) {
+        const speed = (boost && me.energy >= i * step * drain ? run : walk) * chargeScale
+        const dx = heading[0] * speed - vx, dy = heading[1] * speed - vy
+        const fraction = Math.min(1, maxVelocityChange / (Math.hypot(dx, dy) || 1))
+        // Average the starting and ending velocities over the substep.
+        const nx = px + (vx + dx * fraction / 2) * step
+        const ny = py + (vy + dy * fraction / 2) * step
+        if (!map.walkSegment(px, py, nx, ny)) return null
+        vx += dx * fraction
+        vy += dy * fraction
+        px = nx
+        py = ny
+        points.push([px, py])
+        margin = Math.min(margin, distanceFromEdge(px, py, i * step))
+        // The resource movement ends at pickup range. Subsequent frames will reassess the route.
+        if (collect && pickup && hyp2(px, py, pickup.pos[0], pickup.pos[1]) <= radius &&
+            Math.abs(map.groundAt(px, py) - pickup.pos[2]) <= 3.5) break
+      }
+      return { points, margin, progress: nextDistance - hyp2(px, py, ...zone.next_center) }
+    }
+
+    // Only reconsider when the actual combat movement would cross the shrinking edge soon.
+    const current = simulate(move, true)
+    if (!current || current.margin >= 0) return null
+
+    const threats = visible.flatMap(actor => {
+      const [ax, ay, az] = actor.pos
+      const bearing = Math.atan2(y - ay, x - ax)
+      const recentlyHit = o.t - (this.attackers.get(actor.id) ?? -99) < 2
+      if (!recentlyHit && Math.abs(wrap(actor.aim[0] - bearing)) > 0.45) return []
+      const range = Math.max(...(actor.weapons ?? ["gun"]).map(kind =>
+        kind === "mortar" ? 0 : (this.cfg.weapons[kind]?.range ?? 0)))
+      const distance = hyp2(x, y, ax, ay)
+      if (distance > range + 24) return []
+      const muzzle = az + (this.cfg.mech?.muzzle_height ?? 7) * (1 + 0.05 * (actor.cubes ?? 0))
+      return [{ x: ax, y: ay, muzzle, range, distance }]
+    }).sort((a, b) => a.distance - b.distance).slice(0, 3)
+    const bodyHeight = (me.stats.height ?? 9) / 2
+    const inward = Math.atan2(zone.next_center[1] - y, zone.next_center[0] - x)
+    let best: [number, number] | null = null
+    let bestExposure = Infinity, bestProgress = -Infinity
+    for (const offset of [0, Math.PI / 4, -Math.PI / 4, Math.PI * 5 / 12, -Math.PI * 5 / 12]) {
+      const heading: [number, number] = [Math.cos(inward + offset), Math.sin(inward + offset)]
+      const path = simulate(heading)
+      if (!path || path.margin < 0 || path.progress < 0.5) continue
+      let exposure = 0
+      for (const [px, py] of path.points) {
+        const height = map.groundAt(px, py) + bodyHeight
+        for (const threat of threats) {
+          if (hyp2(px, py, threat.x, threat.y) <= threat.range &&
+              map.los(threat.x, threat.y, threat.muzzle, px, py, height)) exposure++
+        }
+      }
+      if (exposure < bestExposure || (exposure === bestExposure && path.progress > bestProgress)) {
+        best = heading
+        bestExposure = exposure
+        bestProgress = path.progress
+      }
+    }
+    return best
   }
 
   retreatAttacker(t: number, x: number, y: number, target: Track): Track {
