@@ -933,12 +933,19 @@ class Bot:
         close_fight = (target is not None and target["shoot"] and target["d"] < 40 and (has_light or hp_frac > 0.5)) \
             or finishing
 
+        finishing_drop = next((dr for dr in obs.get("drops", [])
+            if dr.get("holder") == me["id"] and dr["lands_in"] <= 0
+            and 0 < dr["capture_s"] - dr["progress"] <= 1.0
+            and math.dist(pos[:2], dr["pos"][:2]) < dr["radius"]), None)
         if zs["urgent"]:
             mode = "zone"
         elif (self.retreating or many or outranged or (hide and not zs["must_go"])) and not close_fight:
             mode = "cover"
         elif zs["must_go"]:
             mode = "zone"
+        elif finishing_drop is not None and not threats:
+            mode = "capture"
+            goal = finishing_drop["pos"][:2]
         elif "patient" in self.flags and t < self.hide_until and not threats and not zs["urgent"]:
             mode = "hold"  # just broke line of sight: stay put and listen instead of wandering back out
         elif want_cube and hp_frac > 0.35 and (want_cube[0] < 10 or target is None or not target["shoot"]

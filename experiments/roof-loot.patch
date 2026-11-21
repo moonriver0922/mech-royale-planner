@@ -1,0 +1,15 @@
+--- a/bot.py
++++ b/bot.py
+@@ -749,8 +749,11 @@
+         for p in picks_all:
+             if p["kind"] not in WANT_KINDS or p["kind"] in held:
+                 continue
+-            if abs(p["pos"][2] - z) > 25:
++            px, py, pz = p["pos"]
++            if abs(pz - z) > 25:
+                 continue
++            if self.world.ok and pz > z + 4.0 and pz > self.world.ground(px, py) + 3.0:
++                continue  # A ground route cannot reach a pickup on a higher roof.
+             d = math.dist(p["pos"][:2], pos[:2])
+             if d > (240 if not (has_laser or has_light) else 160) or not self._safe_point(zs, p["pos"]) and d > 30:
+                 continue
