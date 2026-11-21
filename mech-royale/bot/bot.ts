@@ -41,6 +41,7 @@ class Brain {
   attackers = new Map<number, number>() // id -> last time they hit us
   hideUntil = 0
   mechHitT = -99
+  mechHitId = -1
   targetId = -1
   targetT = -99
   mechHitBearing = 0
@@ -93,11 +94,15 @@ class Brain {
       })
     }
     for (const [id, tr] of this.tracks) if (t - tr.t > 12) this.tracks.delete(id)
+    let hitAmount = 0
     for (const e of o.events) {
       if (e.type === "damaged" && e.by != null && e.weapon !== "npc") {
         this.attackers.set(e.by, t)
-        if (e.by < 16 && e.bearing != null) {
+        if (e.by >= 0 && e.by < 16 && e.by !== me.id && e.weapon !== "zone" &&
+            e.bearing != null && e.amount > hitAmount) {
+          hitAmount = e.amount
           this.mechHitT = t
+          this.mechHitId = e.by
           this.mechHitBearing = e.bearing
         }
       }
@@ -109,6 +114,11 @@ class Brain {
       }
       if (e.type === "kill") this.tracks.delete(e.target)
     }
+    if (o.events.some((e) => e.type === "kill" && e.target === this.mechHitId)) this.mechHitId = -1
+    const recentAttacker = this.mechHitId >= 0 && t - this.mechHitT < 0.55
+    const attackerTrack = recentAttacker ? this.tracks.get(this.mechHitId) : undefined
+    const visibleAttacker = attackerTrack?.t === t ? attackerTrack : null
+    const evadeUnseenAttacker = recentAttacker && !visibleAttacker
     for (const s of o.sounds) {
       if (["gun", "laser", "laser_charge", "lightning", "mortar", "boost", "step", "jet"].includes(s.kind) && s.dist !== "far") {
         if (t - this.threatT > 1.5) {
@@ -183,7 +193,6 @@ class Brain {
     }
 
     // ---------- choose target
-    const visible = o.mechs.filter((m) => m.kind === "mech")
     let target: Track | null = null
     let tScore = 1e9
     for (const tr of this.tracks.values()) {
@@ -198,6 +207,7 @@ class Brain {
         target = tr
       }
     }
+    if (visibleAttacker) target = visibleAttacker
     if (target) {
       this.targetId = target.id
       this.targetT = t
@@ -255,14 +265,22 @@ class Brain {
     let boost = false
     let jump = false
     let strafe = 0
-    let laserCharging = laserS >= 0 && (me.weapons[laserS]?.charge ?? 0) > 0
+    const laserCharging = laserS >= 0 && (me.weapons[laserS]?.charge ?? 0) > 0
+    // Releasing an active charge fires. Hold it while waiting for a confirmed shot.
+    if (laserCharging) fire[laserS] = true
 
-    if (target) {
+    if (evadeUnseenAttacker) {
+      mode = zoneGoal ? "evade+zone" : "evade"
+      wantAim = true
+      aimYaw = this.mechHitBearing
+      moveGoal = zoneGoal ?? this.evadeGoal(x, y, z, aimYaw, me.grounded)
+      boost = !!moveGoal && me.energy > 25
+    } else if (target) {
       const tp = target.pos
       const d = hyp2(x, y, tp[0], tp[1])
       const tScale = 1 + 0.05 * target.cubes
       const tcz = tp[2] + 4.5 * tScale
-      const seen = t - target.t < 0.11
+      const seen = target.t === t
       const hasLos = map ? map.los(x, y, muzzleZ, tp[0], tp[1], tcz) : true
       mode = "fight"
 
@@ -310,24 +328,24 @@ class Brain {
           if (d < L.stats.range - 1 && yawErr < ((L.stats.cone_deg * Math.PI) / 180) * 0.45 && me.energy > L.stats.energy + 2) fire[lightS] = true
         }
       }
-      // laser: charge while target is around, release when full and aligned
+      // Laser charge and manual release both require current visual contact.
       if (laserS >= 0) {
         const Lw = me.weapons[laserS]!
         const full = Lw.stats.charge
         const ch = Lw.charge ?? 0
+        const validContact = seen && hasLos && Math.hypot(d, tcz - muzzleZ) < Lw.stats.range
         if (ch > 0) {
           const ready = ch >= full - 0.05
-          const aligned = seen && hasLos && yawErr < tol * 0.9 && pitchErr < tol * 1.5 + 0.02
-          if (ready && aligned) fire[laserS] = false
-          else fire[laserS] = true
-        } else if (Lw.cooldown <= 0.05 && seen && d < Lw.stats.range && (hasLos || d < 60)) {
+          const aligned = yawErr < tol * 0.9 && pitchErr < tol * 1.5 + 0.02
+          if (ready && validContact && aligned) fire[laserS] = false
+        } else if (Lw.cooldown <= 0.05 && validContact) {
           fire[laserS] = true
         }
       }
       // mortar
       if (mortarS >= 0) {
         const M = me.weapons[mortarS]!
-        if (M.cooldown <= 0 && d > 18 && d < 220) {
+        if (seen && M.cooldown <= 0 && d > 18 && d < 220) {
           const v = M.stats.speed, g = M.stats.gravity
           const h = tp[2] - (z + 9.5 * scale)
           let tof = d / (v * 0.7)
@@ -433,7 +451,7 @@ class Brain {
     }
 
     // heal: hold still (silent) out of sight until HP is back
-    const healing = !moveGoal && !target && !zoneGoal && nearCubeD > 40 && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9))
+    const healing = !evadeUnseenAttacker && !moveGoal && !target && !zoneGoal && nearCubeD > 40 && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9))
     let slow = false
     if (healing) {
       mode = "heal"
@@ -451,7 +469,7 @@ class Brain {
         }
       }
     }
-    if (!moveGoal && !healing) {
+    if (!moveGoal && !healing && !evadeUnseenAttacker) {
       if (zoneGoal) {
         mode = mode === "fight" ? "fight-zone" : "zone"
         moveGoal = zoneGoal
@@ -557,7 +575,7 @@ class Brain {
       const direct = map.los(x, y, z + 2, moveGoal[0], moveGoal[1], map.groundAt(moveGoal[0], moveGoal[1]) + 2)
       if (gd > 3) {
         const navigating = mode === "zone" || mode === "roam" || mode === "loot" || mode === "heal" ||
-          mode.startsWith("fight+resource")
+          mode.startsWith("fight+resource") || mode.startsWith("evade")
         const checkGround = navigating && me.grounded && Math.abs(z - map.groundAt(x, y)) < 2
         if (direct && gd < 60 && (!checkGround || map.walkSegment(x, y, moveGoal[0], moveGoal[1]))) {
           mv = [(moveGoal[0] - x) / gd, (moveGoal[1] - y) / gd]
@@ -682,11 +700,6 @@ class Brain {
       }
       aimPitch = 0
     }
-    // keep laser charging when target briefly lost
-    if (laserS >= 0 && laserCharging && !fire[laserS]) {
-      const Lw = me.weapons[laserS]!
-      if ((Lw.charge ?? 0) < Lw.stats.charge - 0.05) fire[laserS] = true
-    }
     // reload when safe
     if (gunS >= 0 && mode !== "fight") {
       const g = me.weapons[gunS]!
@@ -699,8 +712,8 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
-    void visible
+    const contact = evadeUnseenAttacker ? `H${this.mechHitId}` : target ? `T${target.id}` : ""
+    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${contact}`)
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
     return act
@@ -708,6 +721,16 @@ class Brain {
 
   mapGround(x: number, y: number) {
     return this.map ? this.map.groundAt(x, y) : 0
+  }
+
+  evadeGoal(x: number, y: number, z: number, bearing: number, grounded: boolean): [number, number] | null {
+    const side = this.strafeDir * 2 * Math.PI / 3
+    for (const offset of [side, -side, Math.PI]) {
+      const dx = Math.cos(bearing + offset), dy = Math.sin(bearing + offset)
+      if (grounded && this.map && !this.map.groundStepClear(x, y, z, dx, dy)) continue
+      return [x + dx * 8, y + dy * 8]
+    }
+    return null
   }
 
   retreatAttacker(t: number, x: number, y: number, target: Track): Track {
