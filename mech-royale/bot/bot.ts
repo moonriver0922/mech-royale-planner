@@ -27,6 +27,7 @@ class Brain {
   strafeUntil = 0
   lastPos: number[] = [0, 0, 0]
   stuckT = 0
+  combatStep: { move: [number, number]; until: number } | null = null
   lastDamageT = -99
   lastDamageBearing = 0
   threatBearing: number | null = null
@@ -603,6 +604,30 @@ class Brain {
     const moved = hyp2(x, y, this.lastPos[0], this.lastPos[1])
     if ((mv[0] || mv[1]) && moved < 0.25 && me.grounded) this.stuckT += 0.1
     else if (moved > 0.6) this.stuckT = 0
+    // Clear the wall beside a stalled combat path before using the jump fallback.
+    if (map && mode === "retreat" && me.grounded &&
+        dCur < curR - 8 && Math.abs(z - map.groundAt(x, y)) < 0.6) {
+      if (this.combatStep && (t >= this.combatStep.until ||
+          !map.groundStepClear(x, y, z, ...this.combatStep.move))) this.combatStep = null
+      const stride = Math.hypot(...mv)
+      if (!this.combatStep && this.stuckT >= 0.3 && moved < 0.25 && stride >= 0.75 &&
+          !map.groundStepClear(x, y, z, mv[0] / stride, mv[1] / stride)) {
+        const heading = Math.atan2(mv[1], mv[0])
+        for (const turn of [60, -60, 90, -90, 120, -120, 150, -150]) {
+          const angle = heading + turn * this.strafeDir * Math.PI / 180
+          const next: [number, number] = [Math.cos(angle), Math.sin(angle)]
+          if (!map.groundStepClear(x, y, z, ...next)) continue
+          this.combatStep = { move: next, until: t + 0.5 }
+          break
+        }
+      }
+    } else {
+      this.combatStep = null
+    }
+    if (this.combatStep) {
+      mv = this.combatStep.move
+      this.stuckT = 0
+    }
     if (this.stuckT > 0.6) {
       jump = true
       boost = me.energy > 10
@@ -646,7 +671,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     void visible
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)

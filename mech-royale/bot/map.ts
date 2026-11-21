@@ -171,6 +171,17 @@ export class WorldMap {
     return true
   }
 
+  // Short clearance probe at foot height, usable even next to a wall on a blocked nav cell.
+  groundStepClear(x: number, y: number, z: number, dx: number, dy: number) {
+    for (let step = 1; step <= 3; step++) {
+      const px = x + step * dx, py = y + step * dy
+      const cell = this.idx(px, py)
+      if (this.top[cell] > z + 1.2 && this.base[cell] < z + 9) return false
+      if (this.groundAt(px, py) > z + 1.25) return false
+    }
+    return true
+  }
+
   // Time-sliced Dijkstra (8-conn) distance field from a goal. field() requests a goal,
   // pump() spends a bounded amount of time on it; steer() reads the last finished field.
   work!: Float32Array
