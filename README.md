@@ -4,6 +4,8 @@ This entry adapts the MIT-licensed [LanceHuang245/mech-royale bot at commit 171b
 
 ## Practice score and local development
 
+Our best verified practice score is **5.10** across 48 official matches, earned by the [ground-clearance entry](https://github.com/moonriver0922/mech-royale-planner/tree/af337d5c1275d03478685bd4936c8a551fa6b200). The [run history](experiments/official-runs.md) lists the competition builds, scores, receipts and comparisons for the next round. The development branch contains the Python entry and local simulators. The TypeScript competition builds have their own branches.
+
 The first scored entry, [97e0e58](https://github.com/moonriver0922/mech-royale-planner/tree/97e0e588ac9fb49533602a738344cb3fdc8b1551), earned **4.54** over 48 official practice matches (receipt `BB-407987E8`). The development version also finishes an uncontested supply drop when at most one second remains, provided no threat or circle decision takes priority.
 
 Use the [practice simulator](tools/README.md) for paired runs against house-style bots and the [free-for-all simulator](tools/ffa/README.md) to compare two entrants in the same match with swapped spawns. Both run locally with the extracted organizer kit. The [experiment notes](experiments/README.md) include the public competitors studied, immutable source versions and measured results.

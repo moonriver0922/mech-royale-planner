@@ -5,6 +5,7 @@ import random
 import time
 
 DT = 0.1  # one decision per 0.1 s
+MOVEMENT_MODEL = "horizontal-vector-subticks-v1"
 NOISE_MULT = 5.0  # house-bot aim noise multiplier: with HUNT 1.0 and 3 lasers the kit example scores ~1.2 (real 1.15)
 LASER_BOTS = 3
 HUNT_MULT = 1.0  # scales how far house bots chase us
@@ -12,6 +13,24 @@ HUNT_MULT = 1.0  # scales how far house bots chase us
 
 def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
+
+
+def horizontal_motion(velocity, target, acceleration, ticks, tick_dt):
+    """Approach the requested planar velocity and integrate travel at the game tick rate."""
+    vx, vy = velocity[:2]
+    x = y = 0.0
+    for _ in range(ticks):
+        dx, dy = target[0] - vx, target[1] - vy
+        change = math.hypot(dx, dy)
+        if change > acceleration * tick_dt:
+            scale = acceleration * tick_dt / change
+            vx += dx * scale
+            vy += dy * scale
+        else:
+            vx, vy = target
+        x += vx * tick_dt
+        y += vy * tick_dt
+    return vx, vy, x, y
 
 
 class Mech:
@@ -259,9 +278,10 @@ class Sim:
         if m.charge > 0:
             speed *= 0.5
         acc = cfg["ground_accel"] if m.grounded else cfg["air_accel"]
-        for i in (0, 1):
-            dv = mv[i] * speed - m.vel[i]
-            m.vel[i] += max(-acc * DT, min(acc * DT, dv))
+        match = self.cfg["match"]
+        target = (mv[0] * speed, mv[1] * speed)
+        m.vel[0], m.vel[1], dx, dy = horizontal_motion(
+            m.vel, target, acc, match["decide_every"], 1 / match["tick_hz"])
         if boost:
             m.energy -= (cfg["boost_drain"] if m.grounded else cfg["jet_drain"]) * DT
             m.last_spend = self.t
@@ -272,7 +292,7 @@ class Sim:
             if boost:
                 m.vel[2] = min(cfg["max_rise_speed"], m.vel[2] + cfg["jet_accel"] * DT)
             m.vel[2] -= cfg["gravity"] * DT
-        nx, ny = m.pos[0] + m.vel[0] * DT, m.pos[1] + m.vel[1] * DT
+        nx, ny = m.pos[0] + dx, m.pos[1] + dy
         nz = m.pos[2] + m.vel[2] * DT
         if self.w.blocked(nx, ny, max(nz, m.pos[2])):
             if not self.w.blocked(nx, m.pos[1], m.pos[2]):

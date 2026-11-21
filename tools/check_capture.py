@@ -9,6 +9,8 @@ import math
 from pathlib import Path
 import sys
 
+from practice_engine import horizontal_motion
+
 
 def load_bot(path):
     sys.path.insert(0, str(path.parent))
@@ -52,11 +54,12 @@ def stays_until_capture(bot_type, hello, initial):
         move = action.get("move", [0, 0])
         length = max(1.0, math.hypot(*move))
         speed = cfg["boost_speed"] if action.get("boost") else me["stats"]["walk_speed"]
-        for axis in (0, 1):
-            delta = move[axis] * speed / length - me["vel"][axis]
-            limit = cfg["ground_accel"] * dt
-            me["vel"][axis] += min(limit, max(-limit, delta))
-            me["pos"][axis] += me["vel"][axis] * dt
+        target = (move[0] * speed / length, move[1] * speed / length)
+        match = hello["config"]["match"]
+        me["vel"][0], me["vel"][1], dx, dy = horizontal_motion(
+            me["vel"], target, cfg["ground_accel"], match["decide_every"], 1 / match["tick_hz"])
+        me["pos"][0] += dx
+        me["pos"][1] += dy
         if math.dist(me["pos"][:2], drop["pos"][:2]) > drop["radius"]:
             return False
         drop["progress"] += dt

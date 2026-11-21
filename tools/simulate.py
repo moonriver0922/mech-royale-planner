@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 from zipfile import ZipFile
 
-from practice_engine import Sim
+from practice_engine import MOVEMENT_MODEL, Sim
 from sim_world import World
 
 
@@ -159,6 +159,7 @@ def main():
         bots = {name: resolve_bot(source, Path(temp) / name) for name, source in sources.items()}
         report = {
             "model": "approximate-practice-roof-loot" if args.roof_loot else "approximate-practice", "first_seed": args.seed, "matches": args.matches,
+            "movement_model": MOVEMENT_MODEL,
             "bot_rng_seed": hello["seed"], "python": platform.python_version(),
             "MR_FLAGS": os.environ.get("MR_FLAGS"),
             "inputs_sha256": {

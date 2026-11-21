@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 from simulate import BotProcess, resolve_bot
+from practice_engine import MOVEMENT_MODEL
 from sim_world import World
 from arena import HunterBot, League
 
@@ -73,6 +74,7 @@ def main():
         resolved = {k: resolve_bot(v, Path(temp) / k) for k, v in versions.items()}
         scripts = {k: x[0] for k, x in resolved.items()}
         report = {"model": "local-ffa-14-hunters", "bots": {k: x[1] for k, x in resolved.items()}, "pairs": []}
+        report["movement_model"] = MOVEMENT_MODEL
         for seed in range(args.seed, args.seed + args.pairs):
             slots = random.Random(seed).sample(range(16), 2)
             games = [play(seed, order, scripts, greeting, world) for order in (slots, slots[::-1])]

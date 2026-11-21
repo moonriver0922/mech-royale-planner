@@ -36,8 +36,22 @@ This scenario uses the protocol's horizontal pickup radius and 4 m vertical tole
 
 ## Model and measurement limits
 
+Both referees integrate horizontal velocity over the two physics ticks in each decision. They limit the magnitude of the change in velocity using the kit's ground or air acceleration. Reports identify this revision with `movement_model: horizontal-vector-subticks-v1`. To check the first two seconds of unobstructed walking against the kit recording, run `python3 -B tools/check_movement.py --kit ../mechfight-kit`. The recording rounds position and velocity to two decimal places. The model resolves walls and vertical movement once per decision.
+
 The referee uses the kit's recorded configuration and terrain. It advances 0.1 simulated seconds per decision. Both policies receive the same recorded per-slot RNG seed and slot 0. The world seed stays inside the referee. Once actions diverge, the matches can evolve differently. Each observation exposes the currently interpolated circle and the next circle. A dead mech shares its place with others eliminated in that tick, immediately below the survivors. At time expiry surviving mechs are ordered by HP.
 
 This practice model uses approximate opponents, movement and equipment rules. Crates, NPCs, sounds, beams, contested drops and upgrade offers are absent. The house bots' information, spawn distribution and equipment differ from the scorer. This model runs actions to completion and aborts stalled processes. Use the official `check/check.py` to check 50 ms replies and the official 48 matches to measure practice score. For free-for-all comparisons see [the FFA runner](ffa/README.md).
 
 The referee and fixed map queries adapt the upstream MIT [practice simulator](https://github.com/LanceHuang245/mech-royale/blob/171bc0675b04c4095f5a3619cc63664b8a338922/tools/sim.py) and [World class](https://github.com/LanceHuang245/mech-royale/blob/171bc0675b04c4095f5a3619cc63664b8a338922/bot.py) by LanceHuang245. The repository retains its [license and notice](../LICENSE). This adaptation adds the protocol process runner, independent map loading, paired reporting, kit fingerprints, and corrections to kill accounting and placement ties.
+
+## Reproducing a timing-sensitive route decision
+
+TTUN's TypeScript map search yields after a wall-clock interval or a fixed number of cells. Under CPU contention, two copies of the same bot can complete different amounts of route planning. For an offline diagnostic, advance the bot's monotonic clock by a fixed 0.3 ms per call. Each 1,024-node time check then consumes the same logical budget. The Python referee still measures actual response times.
+
+```sh
+NODE_OPTIONS="--require=\"$PWD/tools/comparison-clock.cjs\"" python3 -B tools/simulate.py --kit ../mechfight-kit \
+  --bot git:af337d5:mech-royale/bot/bot.ts --baseline git:af337d5:mech-royale/bot/bot.ts \
+  --roof-loot --seed 301 --matches 2
+```
+
+The example compares one identical commit with itself. Fetch its practice branch before running the command. Use this mode to isolate decision differences in bots that consult the monotonic clock. Run the official 50 ms conformance check and a second set of matches with the real clock when choosing a competition build.
