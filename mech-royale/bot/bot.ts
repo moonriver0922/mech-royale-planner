@@ -1,5 +1,5 @@
 import { type ActorObs, type Hello, type Observation, type BotAction, draw, log, run } from "./mechfight.ts"
-import { WorldMap } from "./map.ts"
+import { type CoverThreat, WorldMap } from "./map.ts"
 
 const TAU = Math.PI * 2
 const wrap = (a: number) => {
@@ -255,6 +255,7 @@ class Brain {
     let boost = false
     let jump = false
     let strafe = 0
+    let usedMultiThreatCover = false
     let laserCharging = laserS >= 0 && (me.weapons[laserS]?.charge ?? 0) > 0
 
     if (target) {
@@ -362,7 +363,21 @@ class Brain {
         mode = "retreat"
         const danger = this.retreatAttacker(t, x, y, target)
         const [ex, ey, ez] = danger.pos
-        moveGoal = map.coverFrom(x, y, ex, ey, ez + 8, 50) ?? [2 * x - ex, 2 * y - ey]
+        const primaryCover = map.coverFrom(x, y, ex, ey, ez + 8, 50)
+        moveGoal = primaryCover ?? [2 * x - ex, 2 * y - ey]
+        const safeRadius = Math.min(50, curR - dCur - 3)
+        if (primaryCover && !zoneGoal && safeRadius >= 12 && me.grounded &&
+            Math.abs(z - map.groundAt(x, y)) < 2 && map.walk[map.cellOf(x, y)]) {
+          const others = this.recentRetreatThreats(t, x, y, danger.id)
+          if (others.length && map.isCoverExposed(...primaryCover, others)) {
+            const maxDetour = hyp2(x, y, ...primaryCover) + 12
+            const cover = map.coverFrom(x, y, ex, ey, ez + 8, Math.min(safeRadius, maxDetour), others)
+            if (cover) {
+              moveGoal = cover
+              usedMultiThreatCover = true
+            }
+          }
+        }
         boost = me.energy > 15
       } else {
         const dirx = (tp[0] - x) / Math.max(d, 1), diry = (tp[1] - y) / Math.max(d, 1)
@@ -395,6 +410,7 @@ class Brain {
       }
       if (nearCube && nearCubeD < (losing ? 12 : hpFrac > 0.5 ? 70 : 40)) {
         moveGoal = [nearCube[0], nearCube[1]]
+        usedMultiThreatCover = false
         mode += "+cube"
       } else if (nearPick && !losing && nearPickD < (onlyGun ? 60 : 35)) {
         moveGoal = [nearPick[0], nearPick[1]]
@@ -699,7 +715,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}${usedMultiThreatCover ? " cover" : ""}`)
     void visible
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
@@ -727,6 +743,17 @@ class Brain {
       }
     }
     return danger
+  }
+
+  recentRetreatThreats(t: number, x: number, y: number, primaryId: number): CoverThreat[] {
+    const threats: (CoverThreat & { hitAge: number })[] = []
+    for (const tr of this.tracks.values()) {
+      const hitAge = t - (this.attackers.get(tr.id) ?? -99)
+      if (tr.id === primaryId || hitAge >= 3 || t - tr.t > 1.5 || hyp2(x, y, tr.pos[0], tr.pos[1]) > 190) continue
+      threats.push({ x: tr.pos[0], y: tr.pos[1], eyeZ: tr.pos[2] + 8, hitAge })
+    }
+    threats.sort((a, b) => a.hitAge - b.hitAge)
+    return threats.slice(0, 2)
   }
 
   combatResource(o: Observation, map: WorldMap, target: Track, onlyGun: boolean,
