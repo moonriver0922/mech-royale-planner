@@ -47,6 +47,11 @@ class Brain {
   npcMem = new Map<number, { pos: number[]; vel: number[]; t: number; hp: number }>()
   cubeMem = new Map<number, { pos: number[]; t: number }>()
   pickMem = new Map<number, { pos: number[]; kind: string; t: number }>()
+  previousAlive: number | null = null
+  pendingLosses: number[] = []
+  pendingKills: number[] = []
+  externalLosses: number[] = []
+  lastExternalLoss = 0
 
   constructor(hello: Hello) {
     this.cfg = hello.config
@@ -73,6 +78,28 @@ class Brain {
     }
   }
 
+  observeAttrition(t: number, alive: number, kills: number) {
+    const creditDelay = 0.4
+    if (this.previousAlive === null) this.lastExternalLoss = t
+    // Match kills to nearby population reports before treating a loss as external.
+    while (this.pendingLosses.length && t - this.pendingLosses[0] > creditDelay) {
+      this.lastExternalLoss = this.pendingLosses.shift()!
+      this.externalLosses.push(this.lastExternalLoss)
+    }
+    while (this.pendingKills.length && t - this.pendingKills[0] > creditDelay) this.pendingKills.shift()
+    while (this.externalLosses.length && t - this.externalLosses[0] > 24) this.externalLosses.shift()
+
+    const losses = Math.max(0, (this.previousAlive ?? alive) - alive)
+    this.previousAlive = alive
+    for (let i = 0; i < losses; i++) this.pendingLosses.push(t)
+    for (let i = 0; i < kills; i++) this.pendingKills.push(t)
+    const matched = Math.min(this.pendingLosses.length, this.pendingKills.length)
+    if (matched > 0) {
+      this.pendingLosses.splice(0, matched)
+      this.pendingKills.splice(0, matched)
+    }
+  }
+
   act(o: Observation): BotAction {
     const t0 = performance.now()
     const me = o.self
@@ -93,6 +120,7 @@ class Brain {
       })
     }
     for (const [id, tr] of this.tracks) if (t - tr.t > 12) this.tracks.delete(id)
+    let ownKills = 0
     for (const e of o.events) {
       if (e.type === "damaged" && e.by != null && e.weapon !== "npc") {
         this.attackers.set(e.by, t)
@@ -107,8 +135,12 @@ class Brain {
         this.threatBearing = e.bearing
         this.threatT = t
       }
-      if (e.type === "kill") this.tracks.delete(e.target)
+      if (e.type === "kill") {
+        this.tracks.delete(e.target)
+        if (e.target >= 0 && e.target < 16) ownKills++
+      }
     }
+    this.observeAttrition(t, o.alive, ownKills)
     for (const s of o.sounds) {
       if (["gun", "laser", "laser_charge", "lightning", "mortar", "boost", "step", "jet"].includes(s.kind) && s.dist !== "far") {
         if (t - this.threatT > 1.5) {
@@ -255,6 +287,7 @@ class Brain {
     let boost = false
     let jump = false
     let strafe = 0
+    let rangeAdjustment = ""
     let laserCharging = laserS >= 0 && (me.weapons[laserS]?.charge ?? 0) > 0
 
     if (target) {
@@ -378,6 +411,24 @@ class Brain {
           this.strafeUntil = t + 0.35 + this.rng() * 0.7
         }
         strafe = this.strafeDir
+        if (radial === 0 && seen && hasLos && !zoneGoal && !finishing && !target.charging &&
+            map && me.grounded && !laserCharging && (fire[0] || fire[1])) {
+          const quiet = o.alive >= 8 && this.pendingLosses.length === 0 && t - this.lastExternalLoss >= 40
+          const active = o.alive >= 4 && this.externalLosses.length >= 2
+          let bias = 0
+          if (quiet && threats === 1 && hpFrac >= 0.68 && me.energy >= 35 &&
+              d >= prefer - 3 && theirFrac <= Math.min(0.65, hpFrac - 0.15)) bias = 0.38
+          else if (active && threats >= 2 && d <= prefer && hpFrac <= 0.8 && theirFrac >= 0.4) bias = -0.35
+          if (bias !== 0) {
+            const stepX = dirx * bias - diry * strafe * 0.9
+            const stepY = diry * bias + dirx * strafe * 0.9
+            const gx = x + stepX * 6, gy = y + stepY * 6
+            if (hyp2(gx, gy, ...zn.center) < curR - 8 && map.walkSegment(x, y, gx, gy)) {
+              radial = bias
+              rangeAdjustment = bias > 0 ? " Sclosegap" : " Sspacing"
+            }
+          }
+        }
         // dodge incoming laser: hard strafe
         if (target.charging) {
           const theirYaw = target.aim[0]
@@ -702,7 +753,7 @@ class Brain {
     act.fire = fire
     act.boost = boost
     act.jump = jump
-    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
+    draw.label(`${mode}${rotation ? "+rotate" : ""}${this.combatStep ? "+sidestep" : ""}${mode === "fight" ? rangeAdjustment : ""} hp${me.hp | 0} ${target ? "T" + target.id : ""}`)
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 20 - (performance.now() - t0)), 70000)
     return act
