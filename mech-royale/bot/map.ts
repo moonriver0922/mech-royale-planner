@@ -332,18 +332,35 @@ export class WorldMap {
     return [bi / l, bj / l]
   }
 
+  coverExposure(x: number, y: number, threats: CoverThreat[]): number {
+    const top = this.groundAt(x, y) + 6
+    let cost = 0
+    for (const threat of threats) {
+      if (this.los(threat.x, threat.y, threat.eyeZ, x, y, top)) cost += threat.exposureCost
+    }
+    return cost
+  }
+
   // Nearby walkable point that hides from (ex,ey,ez) eye, searching rings around (x,y).
-  coverFrom(x: number, y: number, ex: number, ey: number, ez: number, maxR = 40): [number, number] | null {
+  coverFrom(x: number, y: number, ex: number, ey: number, ez: number, maxR = 40,
+      additionalThreats: CoverThreat[] = []): [number, number] | null {
     let best: [number, number] | null = null, bs = 1e9
+    const startDistance = Math.hypot(x - ex, y - ey)
     for (let r = 6; r <= maxR; r += 6)
       for (let a = 0; a < 16; a++) {
         const ang = (a / 16) * Math.PI * 2
         const px = x + Math.cos(ang) * r, py = y + Math.sin(ang) * r
         if (!this.walk[this.cellOf(px, py)]) continue
-        const pz = this.groundAt(px, py)
-        if (this.los(ex, ey, ez, px, py, pz + 6)) continue
-        const away = Math.hypot(px - ex, py - ey) - Math.hypot(x - ex, y - ey)
-        const s = r - away * 0.3
+        const away = Math.hypot(px - ex, py - ey) - startDistance
+        let s = r - away * 0.3
+        if (s >= bs) continue
+        const pz = this.groundAt(px, py) + 6
+        if (this.los(ex, ey, ez, px, py, pz)) continue
+        if (additionalThreats.length && !this.walkSegment(x, y, px, py)) continue
+        for (const threat of additionalThreats) {
+          if (this.los(threat.x, threat.y, threat.eyeZ, px, py, pz)) s += threat.exposureCost
+          if (s >= bs) break
+        }
         if (s < bs) {
           bs = s
           best = [px, py]
@@ -352,3 +369,5 @@ export class WorldMap {
     return best
   }
 }
+
+export type CoverThreat = { x: number; y: number; eyeZ: number; exposureCost: number }
