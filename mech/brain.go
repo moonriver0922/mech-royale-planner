@@ -61,6 +61,8 @@ type Brain struct {
 	dropQuietUntil float64 // Only the opportunistic-drop quiet gate reads this.
 	hurtBearing float64
 	hurtSeenBy  bool
+	reloadFaceYaw float64
+	reloadFaceUntil float64
 
 	lootID    int
 	lootSince float64
@@ -1035,6 +1037,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 		}
 		aim[1] = 0
 	}
+	aim[0] = b.protectReload(o, gun, target, aim[0])
 	aim[1] = clamp(aim[1], st.MinPitch, st.MaxPitch)
 	act.Aim = &aim
 
@@ -1072,6 +1075,46 @@ func (b *Brain) step(o *Obs, act *Action) {
 	act.Move = [2]float64{mx, my}
 	act.Boost = boost && (mx != 0 || my != 0)
 	b.Mode = mode
+}
+
+// During a solo gun reload the torso can briefly protect both the original
+// aim direction and a second opponent confirmed by a direct rear hit.
+func (b *Brain) protectReload(o *Obs, gun *WeaponState, target *Track, originalYaw float64) float64 {
+	me := &o.Self
+	if gun == nil || gun.Reload <= 0 || me.Stats.TurnRate <= 0 ||
+		(len(me.Weapons) > 1 && me.Weapons[1] != nil) {
+		b.reloadFaceUntil = 0
+		return originalYaw
+	}
+	for _, e := range o.Events {
+		if e.Type != "damaged" || !e.Rear || e.By == nil || e.Bearing == nil ||
+			(e.Weapon != "gun" && e.Weapon != "laser" && e.Weapon != "lightning") {
+			continue
+		}
+		// Preserve the firing lane unless both ends of the proposed armor arc
+		// have actually dealt damage recently, from different opponents.
+		if target == nil || target.ID == *e.By || o.T-target.HitMe > gun.Stats.Reload {
+			continue
+		}
+		offset := angDiff(*e.Bearing, originalYaw)
+		if math.Abs(offset) <= me.Stats.FrontArcDeg*math.Pi/360 {
+			continue
+		}
+		// Reserve enough slew time to reacquire the original firing direction.
+		yaw := originalYaw + offset/2
+		outbound := math.Abs(angDiff(yaw, me.Aim[0])) / me.Stats.TurnRate
+		inbound := math.Abs(offset/2) / me.Stats.TurnRate
+		window := math.Min(1.0, gun.Reload-inbound-0.1)
+		if window > outbound {
+			b.reloadFaceYaw = angDiff(yaw, 0)
+			b.reloadFaceUntil = o.T + window
+			break
+		}
+	}
+	if o.T < b.reloadFaceUntil {
+		return b.reloadFaceYaw
+	}
+	return originalYaw
 }
 
 func (b *Brain) escape(me *Self, mx, my *float64, boost, jump *bool) bool {
