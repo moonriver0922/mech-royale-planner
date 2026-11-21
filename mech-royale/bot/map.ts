@@ -14,6 +14,7 @@ export class WorldMap {
   nnx = 0
   nny = 0
   walk!: Uint8Array
+  region!: Int32Array
   dist!: Float32Array
   heap!: Int32Array
   goalKey = ""
@@ -35,6 +36,7 @@ export class WorldMap {
     this.base = new Float32Array(n).fill(1e9)
     for (const p of world.prisms) this.raster(p)
     this.buildNav()
+    this.labelGroundRegions()
   }
 
   private raster(p: any) {
@@ -152,6 +154,57 @@ export class WorldMap {
     I = Math.max(0, Math.min(this.nnx - 1, I))
     J = Math.max(0, Math.min(this.nny - 1, J))
     return J * this.nnx + I
+  }
+
+  // Four-neighbour regions match our eight-neighbour routes because a diagonal
+  // is allowed only when both orthogonal neighbours can be traversed.
+  private labelGroundRegions() {
+    const W = this.nnx, walk = this.walk, region = new Int32Array(walk.length)
+    const queue = this.heap
+    let id = 0
+    for (let start = 0; start < walk.length; start++) {
+      if (!walk[start] || region[start]) continue
+      let head = 0, tail = 1
+      queue[0] = start
+      region[start] = ++id
+      while (head < tail) {
+        const k = queue[head++]
+        // The navigation raster pads each arena boundary with non-walkable cells.
+        for (const n of [k - 1, k + 1, k - W, k + W]) {
+          if (!walk[n] || region[n]) continue
+          region[n] = id
+          queue[tail++] = n
+        }
+      }
+    }
+    this.region = region
+  }
+
+  // Keep the radial waypoint when possible. Otherwise choose nearby floor
+  // in the same region as the avatar, inside the announced next circle.
+  zoneWaypoint(x: number, y: number, goal: [number, number], center: number[], radius: number): [number, number] {
+    const origin = this.region[this.cellOf(x, y)]
+    const goalCell = this.cellOf(goal[0], goal[1])
+    if (!origin || this.region[goalCell] === origin || radius <= 0) return goal
+    const W = this.nnx, col = goalCell % W, row = Math.floor(goalCell / W)
+    const span = Math.ceil(Math.min(64, 1.5 * radius + 2) / 2)
+    const radius2 = radius * radius
+    let best: [number, number] = goal, bestDistance = Infinity, bestApproach = Infinity
+    for (let j = Math.max(0, row - span); j <= Math.min(this.nny - 1, row + span); j++) {
+      const py = this.minY + 2 * j
+      for (let i = Math.max(0, col - span); i <= Math.min(W - 1, col + span); i++) {
+        if (this.region[j * W + i] !== origin) continue
+        const px = this.minX + 2 * i
+        const distance = (px - goal[0]) ** 2 + (py - goal[1]) ** 2
+        if (distance > bestDistance || (px - center[0]) ** 2 + (py - center[1]) ** 2 > radius2) continue
+        const approach = (x - px) ** 2 + (y - py) ** 2
+        if (distance === bestDistance && approach >= bestApproach) continue
+        best = [px, py]
+        bestDistance = distance
+        bestApproach = approach
+      }
+    }
+    return best
   }
 
   walkSegment(x: number, y: number, gx: number, gy: number) {
