@@ -133,13 +133,27 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		if w == nil || w.Kind != "gun" || w.Reload > 0 || a.Fire[i] {
 			continue
 		}
-		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
+		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && c.canTopOff(w, o.Mechs)) {
 			a.Reload = true
 		}
 	}
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})
 	return a
+}
+
+func (c *Controller) canTopOff(w *wire.Weapon, actors []wire.Actor) bool {
+	if float64(w.Ammo) >= c.weapon(w, "mag") {
+		return false
+	}
+	if float64(w.Ammo)*c.weapon(w, "cooldown") >= c.weapon(w, "reload") {
+		for _, actor := range actors {
+			if actor.Kind == "mech" && actor.HP > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Controller) scan(o wire.Observation) wire.Vec2 {
