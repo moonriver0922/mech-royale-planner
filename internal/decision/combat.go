@@ -21,7 +21,7 @@ func (c *Controller) weapon(w *wire.Weapon, name string) float64 {
 	return c.cfg.Weapons[w.Kind][name]
 }
 
-func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
+func (c *Controller) bestEnemy(o wire.Observation, laserEligible bool) (shot, bool) {
 	var best, obscured shot
 	found, retainCharge := false, false
 	for _, p := range o.Mechs {
@@ -30,7 +30,7 @@ func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
 			stats = c.cfg.NPC
 		}
 		scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
-		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP, true)
+		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP, laserEligible)
 		if !ok && c.laser.held && c.target == (goal{"enemy", p.ID}) {
 			// The actor is still reported. Wait briefly for a clear ray instead
 			// of dropping a charged trigger the instant an obstacle intervenes.
@@ -85,7 +85,7 @@ func (c *Controller) solve(o wire.Observation, id int, pos, vel wire.Vec3, heigh
 	return c.solveTarget(o, id, pos, vel, height, radius, hp, false)
 }
 
-func (c *Controller) solveTarget(o wire.Observation, id int, pos, vel wire.Vec3, height, radius, hp float64, enemy bool) (shot, bool) {
+func (c *Controller) solveTarget(o wire.Observation, id int, pos, vel wire.Vec3, height, radius, hp float64, laserEligible bool) (shot, bool) {
 	base := o.Self.Pos
 	base[2] += c.stat(o.Self, "muzzle_height")
 	center := pos
@@ -101,7 +101,7 @@ func (c *Controller) solveTarget(o wire.Observation, id int, pos, vel wire.Vec3,
 		switch w.Kind {
 		case "gun", "lightning":
 		case "laser":
-			if !enemy || !c.laser.available(o, w) {
+			if !laserEligible {
 				continue
 			}
 		default:

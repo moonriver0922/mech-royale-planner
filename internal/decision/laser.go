@@ -46,8 +46,21 @@ func (c *Controller) observeLaser(o wire.Observation) {
 	*l = laserState{}
 }
 
-func (l *laserState) available(o wire.Observation, w *wire.Weapon) bool {
-	return l.present && !l.pending && o.T >= l.shortUntil && w.Cooldown == 0
+// Check self-only conditions once, before ranking targets or changing routes.
+func (c *Controller) laserEligible(o wire.Observation) bool {
+	l := c.laser
+	if !l.present || l.pending || o.T < l.shortUntil {
+		return false
+	}
+	w := o.Self.Weapons[l.slot]
+	if w.Cooldown > 0 {
+		return false
+	}
+	if l.held {
+		return true
+	}
+	_, urgent := c.zoneWithSlowTime(o, c.weapon(w, "charge")+2*c.period)
+	return !urgent
 }
 
 func (c *Controller) rememberLaser(o wire.Observation, a wire.Action) {
@@ -143,23 +156,12 @@ func (c *Controller) laserRay(o wire.Observation, w *wire.Weapon, s shot, aim wi
 
 func (c *Controller) planLaser(o wire.Observation, s shot, a *wire.Action) bool {
 	l := c.laser
-	if !l.present {
-		return false
-	}
 	w := o.Self.Weapons[l.slot]
-	if !l.available(o, w) {
-		return false
-	}
 	full, minCharge := c.weapon(w, "charge"), c.weapon(w, "min_charge")
 	aim := angles(sub(s.center, s.origin))
 	clear := c.laserRay(o, w, s, aim, 0)
-	if !l.held {
-		if !clear {
-			return false
-		}
-		if _, urgent := c.zoneWithSlowTime(o, full+2*c.period); urgent {
-			return false
-		}
+	if !l.held && !clear {
+		return false
 	}
 	tick := 1 / max(1, c.cfg.Match["tick_hz"])
 	// One decision of linear motion detects a disappearing shot window.

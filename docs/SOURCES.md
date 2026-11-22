@@ -27,3 +27,7 @@
 S02 branches directly from our own S00 root at `19126d6516826c1de4e0e54c107c7bc4d6a23d81`. The laser work used that tree, our design memo and the official kit. Protocol §3 supplies coasting and missed-trigger semantics. Sections 5 and 6 define observed weapon stats, actual aim, events and action duration. Section 7 supplies cylinder geometry, forward muzzle, charge/release, forced discharge, lightning short and pickup rules. Section 10 supplies size scaling. Fallback rates, timeouts and range come from the match hello. No opponent implementation or simulator source was used to write S02.
 
 The original S02 work is in `internal/decision/laser.go` and its integration in the existing combat, navigation, controller and resource files. `laser_test.go` exercises actions through `Decide` on synthetic map fixtures. Linear prediction, the finite cylinder intersection, shared-turret scheduling, the short post-charge alignment window and zone ETA are our implementation choices. The controller acts on current observations, with bounded static map segment queries. No training data or extra dependencies are required.
+
+### S04A
+
+The baseline is our published S02 commit `0e6fe8893373923952fa67fd5c0a450246ac10f2`. Our S02 review and the original shrinking-zone fixture motivated a shared eligibility check in the controller, combat and laser files. It uses the existing S02 charge duration and zone ETA. The inward-cube regression exercises the final controller action.

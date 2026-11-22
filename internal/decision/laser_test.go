@@ -301,3 +301,15 @@ func TestLaserShortCancelsSpeedPenaltyImmediately(t *testing.T) {
 		t.Fatalf("short should cancel both charge and slow movement, got fire=%v eta=%v", a.Fire, c.travel(o, 12))
 	}
 }
+
+func TestUnsafeLaserStartYieldsToInwardCube(t *testing.T) {
+	c, o := laserScene(t, false)
+	o.Self.Pos[0] = 8
+	o.Zone = wire.Zone{Radius: 10, NextRadius: 3, ShrinkStart: o.T, ShrinkEnd: o.T + 4}
+	o.Self.Weapons[0].Reload = 1.8
+	o.Cubes = []wire.Cube{{ID: 5, Pos: wire.Vec3{6, 0, 0}}}
+	a := c.Decide(o)
+	if c.target != (goal{"cube", 5}) || a.Move[0] >= 0 || a.Fire != [2]bool{} {
+		t.Fatalf("expected inward cube movement while neither weapon can fire: action=%+v goal=%+v", a, c.target)
+	}
+}

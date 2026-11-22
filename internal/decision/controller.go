@@ -83,7 +83,8 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
 	shootingCrate := false
-	enemy, hasEnemy := c.bestEnemy(o)
+	laserEligible := len(o.Mechs) > 0 && c.laserEligible(o)
+	enemy, hasEnemy := c.bestEnemy(o, laserEligible)
 	if hasEnemy {
 		a.Aim = enemy.aim
 	} else {
@@ -104,7 +105,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a, true)
+		c.fire(o, enemy, &a, laserEligible)
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
@@ -123,7 +124,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		}
 	} else if hasEnemy {
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a, true)
+		c.fire(o, enemy, &a, laserEligible)
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
