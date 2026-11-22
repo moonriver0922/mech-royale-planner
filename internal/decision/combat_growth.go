@@ -14,7 +14,7 @@ const growthHorizon = 3.0
 func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Action) {
 	a.Move = c.engage(o, enemy)
 	c.fire(o, enemy, a, true)
-	if len(o.Cubes)+len(o.Pickups) == 0 || !o.Self.Grounded {
+	if len(o.Pickups) == 0 || o.Self.Weapons[1] != nil || !o.Self.Grounded {
 		return
 	}
 	p := o.Self.Pos
@@ -40,30 +40,22 @@ func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Ac
 	walk := c.growthWalk(o, *a)
 	bestTime, bestID := math.Inf(1), 0
 	original := *a
-	consider := func(id int, pos wire.Vec3, radius float64, weapon bool) {
-		eta, move, ok := c.collectionMove(o, original, enemy, walk, carriers, pos, radius, weapon)
-		if !ok || eta > bestTime || (eta == bestTime && id >= bestID) {
-			return
+	radius := c.cfg.Loot["pickup_radius"]
+	for _, loot := range o.Pickups {
+		if (loot.Kind != "lightning" && loot.Kind != "laser") ||
+			(o.Self.Weapons[0] != nil && o.Self.Weapons[0].Kind == loot.Kind) ||
+			(loot.ID == c.failedTake && o.T < c.retryTakeAt) {
+			continue
 		}
-		bestTime, bestID = eta, id
+		eta, move, ok := c.collectionMove(o, original, enemy, walk, carriers, loot.Pos, radius)
+		if !ok || eta > bestTime || (eta == bestTime && loot.ID >= bestID) {
+			continue
+		}
+		bestTime, bestID = eta, loot.ID
 		a.Move, a.Take = move, nil
-		if weapon && pickupInReach(p, pos, radius) {
+		if pickupInReach(p, loot.Pos, radius) {
+			id := loot.ID
 			a.Take = &id
-		}
-	}
-	if float64(o.Self.Cubes) < c.cfg.Cubes.StatCap {
-		for _, cube := range o.Cubes {
-			consider(cube.ID, cube.Pos, c.cfg.Cubes.PickupRadius, false)
-		}
-	}
-	if o.Self.Weapons[1] == nil {
-		for _, loot := range o.Pickups {
-			if (loot.Kind != "lightning" && loot.Kind != "laser") ||
-				(o.Self.Weapons[0] != nil && o.Self.Weapons[0].Kind == loot.Kind) ||
-				(loot.ID == c.failedTake && o.T < c.retryTakeAt) {
-				continue
-			}
-			consider(loot.ID, loot.Pos, c.cfg.Loot["pickup_radius"], true)
 		}
 	}
 }
@@ -130,7 +122,7 @@ func pickupInReach(p, item wire.Vec3, r float64) bool {
 // Evaluate only a direct walk. Integrate from observed velocity and re-steer
 // at decision boundaries. A pickup must be reachable on an actual tick. Rank
 // qualifying items by interpolated entry time inside that final motion step.
-func (c *Controller) collectionMove(o wire.Observation, a wire.Action, enemy shot, walk growthWalk, carriers []wire.Actor, item wire.Vec3, r float64, weapon bool) (float64, wire.Vec2, bool) {
+func (c *Controller) collectionMove(o wire.Observation, a wire.Action, enemy shot, walk growthWalk, carriers []wire.Actor, item wire.Vec3, r float64) (float64, wire.Vec2, bool) {
 	s := o.Self
 	maxSpeed := max(walk.speed, math.Hypot(s.Vel[0], s.Vel[1]))
 	ground := c.onGround(item[0], item[1])
@@ -140,15 +132,7 @@ func (c *Controller) collectionMove(o wire.Observation, a wire.Action, enemy sho
 	}
 	body := bodyMotion{s.Pos, wire.Vec2{s.Vel[0], s.Vel[1]}}
 	if pickupInReach(s.Pos, item, r) {
-		if weapon {
-			return 0, a.Move, margin(o.Zone, item, o.T, o.T) >= 0
-		}
-		// Cubes are automatic. Keep the original combat move when it still
-		// leaves the cube collectible after the next movement step.
-		normal := c.walkTick(body, a.Move, walk.speedAt(0), walk.accel, walk.tick)
-		if pickupInReach(normal.pos, item, r) && c.terrainWalk(s, s.Pos, normal.pos) {
-			return 0, a.Move, margin(o.Zone, item, o.T, o.T+walk.tick) >= 0
-		}
+		return 0, a.Move, margin(o.Zone, item, o.T, o.T) >= 0
 	}
 
 	original := body

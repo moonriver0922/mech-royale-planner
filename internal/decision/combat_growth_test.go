@@ -38,12 +38,22 @@ func compareWithoutLoot(t *testing.T, c *Controller, o wire.Observation) (wire.A
 	return got, want
 }
 
-func TestGrowthDuringPlayerFire(t *testing.T) {
+func TestCubeDuringPlayerFireKeepsBaselineAction(t *testing.T) {
 	c, o := growthScene(t, false)
 	o.Cubes = []wire.Cube{{ID: 22, Pos: wire.Vec3{-12, 0, 0}}}
 	got, old := compareWithoutLoot(t, c, o)
-	if !got.Fire[0] || got.Take != nil || got.Move != (wire.Vec2{-1, 0}) || got.Move == old.Move || c.target != (goal{"enemy", 11}) {
-		t.Fatalf("expected westward cube collection with original gun shot, got %+v", got)
+	if !got.Fire[0] || !reflect.DeepEqual(got, old) || c.target != (goal{"enemy", 11}) {
+		t.Fatalf("nearby cube changed player combat: got %+v, baseline %+v", got, old)
+	}
+}
+
+func TestCubeOutsideCombatUsesOrdinaryResourceMovement(t *testing.T) {
+	c, o := growthScene(t, false)
+	o.Mechs = nil
+	o.Cubes = []wire.Cube{{ID: 22, Pos: wire.Vec3{-12, 0, 0}}}
+	action := c.Decide(o)
+	if c.target != (goal{"cube", 22}) || action.Move[0] != -1 || action.Take != nil {
+		t.Fatalf("expected ordinary westward cube collection: target %+v, action %+v", c.target, action)
 	}
 }
 
@@ -60,6 +70,8 @@ func TestGrowthWeaponRequiresCurrentLegalPickup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c, o := growthScene(t, false)
 			o.Pickups = []wire.Pickup{{ID: 8800, Kind: tt.kind, Pos: tt.pos}}
+			// A closer cube must never displace the weapon.
+			o.Cubes = []wire.Cube{{ID: 1, Pos: o.Self.Pos}}
 			got, _ := compareWithoutLoot(t, c, o)
 			if !got.Fire[0] || (got.Take != nil) != tt.take || (tt.take && *got.Take != 8800) || (!tt.take && got.Move[0] > -.99) {
 				t.Fatalf("unexpected pickup/approach: %+v", got)
@@ -73,32 +85,32 @@ func TestGrowthNonEligibleLeavesOriginalCombat(t *testing.T) {
 		name   string
 		adjust func(*Controller, *wire.Observation)
 	}{
-		{"far", func(c *Controller, o *wire.Observation) { o.Cubes[0].Pos[0] = -42 }},
-		{"roof loot", func(c *Controller, o *wire.Observation) { o.Cubes[0].Pos[2] = 5 }},
+		{"far", func(c *Controller, o *wire.Observation) { o.Pickups[0].Pos[0] = -42 }},
+		{"roof loot", func(c *Controller, o *wire.Observation) { o.Pickups[0].Pos[2] = 5 }},
 		{"roof self", func(c *Controller, o *wire.Observation) { o.Self.Pos[2] = 6 }},
 		{"airborne", func(c *Controller, o *wire.Observation) { o.Self.Grounded = false }},
-		{"stat cap even before upgrade", func(c *Controller, o *wire.Observation) { o.Self.Cubes = 10; c.cfg.Cubes.Thresholds = []int{11} }},
 		{"projected zone", func(c *Controller, o *wire.Observation) {
 			o.Zone = wire.Zone{Radius: 90, NextRadius: 4, ShrinkStart: o.T, ShrinkEnd: o.T + .5}
 		}},
 		{"NPC aim", func(c *Controller, o *wire.Observation) { o.Mechs[0].Kind = "npc" }},
 		{"mortar", func(c *Controller, o *wire.Observation) {
-			o.Cubes = nil
 			o.Pickups = []wire.Pickup{{ID: 8, Kind: "mortar", Pos: wire.Vec3{-3, 0, 0}}}
 		}},
-		{"occupied slot", func(c *Controller, o *wire.Observation) {
-			o.Cubes = nil
+		{"occupied slot in reach", func(c *Controller, o *wire.Observation) {
 			o.Self.Weapons[1] = &wire.Weapon{Kind: "lightning"}
 			o.Pickups = []wire.Pickup{{ID: 8, Kind: "laser", Pos: wire.Vec3{-3, 0, 0}}}
 		}},
+		{"occupied slot out of reach", func(c *Controller, o *wire.Observation) {
+			o.Self.Weapons[1] = &wire.Weapon{Kind: "lightning"}
+			o.Pickups = []wire.Pickup{{ID: 8, Kind: "laser", Pos: wire.Vec3{-12, 0, 0}}}
+		}},
 		{"recent failed take", func(c *Controller, o *wire.Observation) {
-			o.Cubes = nil
 			c.failedTake = 8
 			c.retryTakeAt = o.T + 1
 			o.Pickups = []wire.Pickup{{ID: 8, Kind: "laser", Pos: wire.Vec3{-3, 0, 0}}}
 		}},
 		{"crate", func(c *Controller, o *wire.Observation) {
-			o.Cubes = nil
+			o.Pickups = nil
 			o.Crates = []wire.Crate{{ID: 8, Pos: wire.Vec3{-10, 0, 0}}}
 		}},
 		{"urgent zone", func(c *Controller, o *wire.Observation) {
@@ -111,7 +123,7 @@ func TestGrowthNonEligibleLeavesOriginalCombat(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, o := growthScene(t, false)
-			o.Cubes = []wire.Cube{{ID: 3, Pos: wire.Vec3{-12, 0, 0}}}
+			o.Pickups = []wire.Pickup{{ID: 3, Kind: "lightning", Pos: wire.Vec3{-12, 0, 0}}}
 			tt.adjust(c, &o)
 			got, old := compareWithoutLoot(t, c, o)
 			if !reflect.DeepEqual(got, old) {
@@ -130,7 +142,7 @@ func TestGrowthDoesNotDisplaceCoveredRecoveryOrWalkThroughWall(t *testing.T) {
 			o.Mechs[0].Pos = wire.Vec3{0, 50, 0}
 			o.Self.Aim[0] = math.Pi / 2
 		}
-		o.Cubes = []wire.Cube{{ID: 3, Pos: wire.Vec3{16, 0, 0}}}
+		o.Pickups = []wire.Pickup{{ID: 3, Kind: "lightning", Pos: wire.Vec3{16, 0, 0}}}
 		got, old := compareWithoutLoot(t, c, o)
 		if !reflect.DeepEqual(got, old) || (covered && (!c.recovering || got.Move != (wire.Vec2{}))) {
 			t.Fatalf("unexpected action: %+v", got)
@@ -151,9 +163,9 @@ func TestGrowthETAUsesVelocityAndStableID(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				c, o := growthScene(t, false)
 				o.Self.Vel[0] = tt.initial
-				o.Cubes = []wire.Cube{{ID: 9, Pos: wire.Vec3{-tt.west, 0, 0}}, {ID: 1, Pos: wire.Vec3{tt.east, 0, 0}}}
+				o.Pickups = []wire.Pickup{{ID: 9, Kind: "lightning", Pos: wire.Vec3{-tt.west, 0, 0}}, {ID: 1, Kind: "lightning", Pos: wire.Vec3{tt.east, 0, 0}}}
 				if reverse {
-					o.Cubes[0], o.Cubes[1] = o.Cubes[1], o.Cubes[0]
+					o.Pickups[0], o.Pickups[1] = o.Pickups[1], o.Pickups[0]
 				}
 				got, _ := compareWithoutLoot(t, c, o)
 				if got.Move[0] != tt.want {
@@ -170,14 +182,14 @@ func TestGrowthThreeSecondsReflectsCurrentAndStartingLaser(t *testing.T) {
 			c, o := growthScene(t, false)
 			if l != "none" {
 				c.cfg.Weapons["laser"] = map[string]float64{"range": 80, "charge": .75, "min_charge": .15, "hold_s": 2, "cooldown": 1.65, "charge_turn_mult": 1}
-				o.Self.Weapons[1] = &wire.Weapon{Kind: "laser"}
+				o.Self.Weapons[0] = &wire.Weapon{Kind: "laser"}
 				if l == "charging" {
-					o.Self.Weapons[1].Charge = .15
+					o.Self.Weapons[0].Charge = .15
 				}
 			}
-			o.Cubes = []wire.Cube{{ID: 1, Pos: wire.Vec3{-38, 0, 0}}}
+			o.Pickups = []wire.Pickup{{ID: 1, Kind: "lightning", Pos: wire.Vec3{-38, 0, 0}}}
 			got, old := compareWithoutLoot(t, c, o)
-			if (l == "none" && got.Move[0] != -1) || (l != "none" && (!got.Fire[1] || got.Move != old.Move)) {
+			if (l == "none" && got.Move[0] != -1) || (l != "none" && (!got.Fire[0] || got.Move != old.Move)) {
 				t.Fatalf("wrong three-second decision for %s: %+v", l, got)
 			}
 		})
@@ -194,12 +206,11 @@ func TestGrowthPreservesNextPhysicsTickGunAndLaserRays(t *testing.T) {
 				o.Mechs[0].Pos = wire.Vec3{40, y, 0}
 				if weapon == "laser" {
 					c.cfg.Weapons["laser"] = map[string]float64{"range": 80, "charge": .75, "min_charge": .15, "hold_s": 2, "cooldown": 1.65, "charge_turn_mult": 1}
-					o.Self.Weapons[0].Reload = 2
-					o.Self.Weapons[1] = &wire.Weapon{Kind: "laser", Charge: .75}
+					o.Self.Weapons[0] = &wire.Weapon{Kind: "laser", Charge: .75}
 				}
-				o.Cubes = []wire.Cube{{ID: 1, Pos: wire.Vec3{-10, 6, 0}}}
+				o.Pickups = []wire.Pickup{{ID: 1, Kind: "lightning", Pos: wire.Vec3{-10, 6, 0}}}
 				got, old := compareWithoutLoot(t, c, o)
-				if (weapon == "gun" && !got.Fire[0]) || (weapon == "laser" && (got.Fire[1] || !c.laser.pending)) {
+				if (weapon == "gun" && !got.Fire[0]) || (weapon == "laser" && (got.Fire[0] || !c.laser.pending)) {
 					t.Fatalf("fixture has no imminent shot: %+v", got)
 				}
 				if (y == 20.18 && got.Move != old.Move) || (y == 20.4 && got.Move[1] != -1) {
@@ -218,7 +229,7 @@ func TestGrowthAvoidsCrossingVisibleLightningRange(t *testing.T) {
 		if arc {
 			o.Mechs[1].Weapons = []string{"gun", "lightning"}
 		}
-		o.Cubes = []wire.Cube{{ID: 2, Pos: wire.Vec3{-17, 0, 0}}}
+		o.Pickups = []wire.Pickup{{ID: 2, Kind: "lightning", Pos: wire.Vec3{-17, 0, 0}}}
 		got, old := compareWithoutLoot(t, c, o)
 		if c.target.id != 11 || (arc && got.Move != old.Move) || (!arc && got.Move[0] != -1) {
 			t.Fatalf("wrong range decision arc=%v: %+v", arc, got)
@@ -226,19 +237,19 @@ func TestGrowthAvoidsCrossingVisibleLightningRange(t *testing.T) {
 	}
 }
 
-func TestGrowthProtectsCubeAtAutomaticPickupBoundary(t *testing.T) {
+func TestCubeAtAutomaticPickupBoundaryKeepsCombatMove(t *testing.T) {
 	c, o := growthScene(t, false)
 	o.Cubes = []wire.Cube{{ID: 4, Pos: wire.Vec3{0, -3.5, 0}}}
 	got, old := compareWithoutLoot(t, c, o)
-	if old.Move[1] < .99 || got.Move[1] != -1 || got.Take != nil {
-		t.Fatalf("original northward motion leaves the boundary cube on the next tick: %+v", got)
+	if old.Move[1] < .99 || !reflect.DeepEqual(got, old) {
+		t.Fatalf("expected the original northward combat action at the automatic pickup boundary: %+v", got)
 	}
 }
 
 func TestGrowthDeclinesUnmodeledPrismSupport(t *testing.T) {
 	c, o := growthScene(t, true)
 	c.world.Prisms[0].Top = 1
-	o.Cubes = []wire.Cube{{ID: 5, Pos: wire.Vec3{16, 0, 0}}}
+	o.Pickups = []wire.Pickup{{ID: 5, Kind: "lightning", Pos: wire.Vec3{16, 0, 0}}}
 	got, old := compareWithoutLoot(t, c, o)
 	if !reflect.DeepEqual(got, old) {
 		t.Fatalf("terrain-only projection crossed raised support: %+v", got)
@@ -271,12 +282,22 @@ func TestGrowthChecksDelayedShotAfterFirstCollectionTick(t *testing.T) {
 					o.Self.Weapons[1] = &wire.Weapon{Kind: "laser", Charge: .15 - tt.due}
 					c.laser = laserState{present: true, slot: 1, pending: true, lastTick: o.Tick - tt.decisionTicks}
 				}
-				// The cube is reached on the first physics tick. The Move and
+				// The weapon is reached on the first physics tick. The Move and
 				// Fire command still apply for the rest of the decision.
-				o.Cubes = []wire.Cube{{ID: 1, Pos: wire.Vec3{-10, tt.y - 3.6, 0}}}
+				o.Pickups = []wire.Pickup{{ID: 1, Kind: "lightning", Pos: wire.Vec3{-10, tt.y - 4.1, 0}}}
 				got, old := compareWithoutLoot(t, c, o)
 				if (weapon == "gun" && !got.Fire[0]) || (weapon == "queued laser" && (got.Fire != [2]bool{} || !c.laser.pending)) {
 					t.Fatalf("fixture does not have the intended shot: %+v", got)
+				}
+				if weapon == "queued laser" {
+					// A pending laser alone cannot select a fresh target. Keep the
+					// two-weapon fixture and exercise its held-shot guard directly.
+					enemy, ok := c.bestEnemy(o)
+					body := bodyMotion{o.Self.Pos, wire.Vec2{0, -1.5}}
+					if !ok || c.heldShotsClear(o, got, enemy, body, wire.Vec2{0, -1}, c.growthWalk(o, got)) == tt.blocked {
+						t.Fatalf("incorrect queued laser clearance: blocked=%v", tt.blocked)
+					}
+					return
 				}
 				if (tt.blocked && got.Move != old.Move) || (!tt.blocked && got.Move[1] != -1) {
 					t.Fatalf("wrong movement at delayed %s tick: %+v", weapon, got)
@@ -292,7 +313,7 @@ func TestGrowthTracksTurretTurnUntilGunCooldownClears(t *testing.T) {
 	o.Mechs[0].Pos[1] = -.5
 	o.Mechs[0].Vel[1] = 13
 	o.Self.Weapons[0].Cooldown = .08
-	o.Cubes = []wire.Cube{{ID: 1, Pos: wire.Vec3{-12, 0, 0}}}
+	o.Pickups = []wire.Pickup{{ID: 1, Kind: "lightning", Pos: wire.Vec3{-12, 0, 0}}}
 	got, _ := compareWithoutLoot(t, c, o)
 	// The turret gains .012 rad per tick. On tick two the lead is about
 	// .068 rad. The actual .024 rad bearing still clears the gun's 2.25 m
@@ -310,7 +331,7 @@ func TestGrowthKeepsLightningRangeAfterFirstTickCollection(t *testing.T) {
 		c, o := growthScene(t, false)
 		o.Self.Aim[0] = -.45 // No trigger while rotating to player 11.
 		o.Mechs = append(o.Mechs, wire.Actor{ID: 15, Kind: "mech", Pos: wire.Vec3{tc.carrierX, 0, 0}, Weapons: []string{"gun", "lightning"}})
-		o.Cubes = []wire.Cube{{ID: 2, Pos: wire.Vec3{-3.6, 0, 0}}}
+		o.Pickups = []wire.Pickup{{ID: 2, Kind: "lightning", Pos: wire.Vec3{-4.1, 0, 0}}}
 		got, old := compareWithoutLoot(t, c, o)
 		// From rest the westward detour travels 0.15 m and then 0.30 m.
 		// The pickup is in reach after 0.15 m. The nearer carrier enters
@@ -329,11 +350,11 @@ func TestGrowthKeepsZoneAfterFirstTickCollection(t *testing.T) {
 		c, o := growthScene(t, false)
 		o.Self.Aim[0] = -.45
 		o.Self.Vel[1] = 12
-		o.Cubes = []wire.Cube{{ID: 2, Pos: wire.Vec3{-3.5, -.15, 0}}}
+		o.Pickups = []wire.Pickup{{ID: 2, Kind: "lightning", Pos: wire.Vec3{-4, -.15, 0}}}
 		o.Zone = wire.Zone{Center: wire.Vec2{0, -49.35}, Radius: tc.radius}
 		got, old := compareWithoutLoot(t, c, o)
 		// Lateral inertia carries the body north across y=0.65 on tick two.
-		// The cube and the first possible collection endpoint are both inside.
+		// The weapon and the first possible collection endpoint are both inside.
 		if got.Fire != [2]bool{} || c.target.id != 11 || (!tc.safe && got.Move != old.Move) || (tc.safe && got.Move[0] > -.99) {
 			t.Errorf("zone radius %v: got %+v, original %+v", tc.radius, got, old)
 		}
@@ -347,9 +368,9 @@ func TestGrowthKeepsTerrainClearAfterFirstTickCollection(t *testing.T) {
 		o.Self.Vel[0] = 12
 		o.Self.Aim[0] = math.Pi/2 - .45
 		o.Mechs[0].Pos = wire.Vec3{1.8, 50, 0}
-		o.Cubes = []wire.Cube{{ID: 2, Pos: wire.Vec3{1.65, -3.5, 0}}}
+		o.Pickups = []wire.Pickup{{ID: 2, Kind: "lightning", Pos: wire.Vec3{1.65, -4, 0}}}
 		got, old := compareWithoutLoot(t, c, o)
-		// The direct path to the cube clears the prism at x=5. Inertia
+		// The direct path to the weapon clears the prism at x=5. Inertia
 		// brings the 2.5 m body radius against it only on the second tick.
 		if got.Fire != [2]bool{} || c.target.id != 11 || (wall && got.Move != old.Move) || (!wall && got.Move[1] > -.99) {
 			t.Errorf("wall=%v: got %+v, original %+v", wall, got, old)
