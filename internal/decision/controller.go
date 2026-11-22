@@ -83,6 +83,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
 	shootingCrate := false
+	ordinaryEngagement := false
 	enemy, hasEnemy := c.bestEnemy(o)
 	if hasEnemy {
 		a.Aim = enemy.aim
@@ -103,7 +104,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
-		c.engageWithGrowth(o, enemy, &a)
+		ordinaryEngagement = !c.engageWithGrowth(o, enemy, &a)
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
@@ -121,7 +122,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			}
 		}
 	} else if hasEnemy {
-		c.engageWithGrowth(o, enemy, &a)
+		ordinaryEngagement = !c.engageWithGrowth(o, enemy, &a)
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
@@ -136,6 +137,9 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
 			a.Reload = true
 		}
+	}
+	if ordinaryEngagement {
+		a.Boost = c.defensiveBoost(o, a, enemy)
 	}
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})

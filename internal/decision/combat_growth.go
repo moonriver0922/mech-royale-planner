@@ -10,18 +10,19 @@ import (
 const growthHorizon = 3.0
 
 // Keep combat target selection, route ownership, turret control and triggers
-// in their original paths. Zone and recovery branches never call this method.
-func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Action) {
+// in their original paths. Report selection even when collecting an item
+// preserves the original move and needs no explicit Take.
+func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Action) bool {
 	a.Move = c.engage(o, enemy)
 	c.fire(o, enemy, a, true)
 	if len(o.Cubes)+len(o.Pickups) == 0 || !o.Self.Grounded {
-		return
+		return false
 	}
 	p := o.Self.Pos
 	// The walking projection uses terrain feet heights. Skip elevated supports,
 	// including roofs whose edges could otherwise masquerade as ground paths.
 	if math.Abs(p[2]-c.world.GroundHeight(p[0], p[1])) > .1 {
-		return
+		return false
 	}
 	player := false
 	var carriers []wire.Actor
@@ -34,7 +35,7 @@ func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Ac
 		}
 	}
 	if !player {
-		return
+		return false
 	}
 
 	walk := c.growthWalk(o, *a)
@@ -66,6 +67,7 @@ func (c *Controller) engageWithGrowth(o wire.Observation, enemy shot, a *wire.Ac
 			consider(loot.ID, loot.Pos, c.cfg.Loot["pickup_radius"], true)
 		}
 	}
+	return !math.IsInf(bestTime, 1)
 }
 
 type growthWalk struct {
