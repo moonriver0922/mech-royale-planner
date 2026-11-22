@@ -133,7 +133,7 @@ func (c *Controller) step(o wire.Observation, yaw float64, emergency bool) wire.
 
 func (c *Controller) recover(o wire.Observation) (move wire.Vec2, covered, escape bool) {
 	s := o.Self
-	if !s.InZone || (!c.recovering && s.HP >= .45*s.MaxHP) {
+	if !s.InZone || (!c.recovering && s.HP >= 0.55*s.MaxHP) {
 		return wire.Vec2{}, false, false
 	}
 	if c.coverValid && (margin(o.Zone, c.cover, o.T, o.T+c.travel(o, distance(s.Pos, c.cover))) <= 0 ||
