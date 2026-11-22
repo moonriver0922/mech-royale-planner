@@ -69,6 +69,8 @@ type WeaponStats struct {
 	ChainFalloff float64 `json:"chain_falloff,omitempty"`
 	Energy       float64 `json:"energy,omitempty"`
 	ShortS       float64 `json:"short_s,omitempty"`
+
+	ChargeTurnMult float64 `json:"charge_turn_mult,omitempty"`
 }
 
 type ZonePhase struct {

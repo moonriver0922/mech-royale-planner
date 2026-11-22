@@ -966,7 +966,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 				}
 				if w.Charge < full-0.051 {
 					act.Fire[i] = true
-					if w.Charge > full*0.45 {
+					if b.laserAimDue(me, gun, w, gunOK, [2]float64{hy, hp}) {
 						aim = [2]float64{hy, hp}
 					}
 				} else {
