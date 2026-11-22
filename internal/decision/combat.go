@@ -186,7 +186,7 @@ func (c *Controller) fire(o wire.Observation, s shot, a *wire.Action, allowLaser
 	}
 }
 
-const playerRangeFraction = 0.55
+const playerRangeFraction = 0.70
 
 func (c *Controller) engage(o wire.Observation, s shot) wire.Vec2 {
 	c.target = goal{kind: "enemy", id: s.id}
