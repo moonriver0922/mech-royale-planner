@@ -36,6 +36,7 @@ func main() {
 		out.Flush()
 	}
 	var brain *mech.Brain
+	var recovery *mech.Recovery
 	var probe struct {
 		Type string `json:"type"`
 	}
@@ -82,6 +83,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "map loaded in %d ms: giddy nx=%d ny=%d nav_nx=%d nav_ny=%d\n", time.Since(mapStart).Milliseconds(), w.NX, w.NY, w.NNX, w.NNY)
 				}
 				brain = mech.NewBrain(&h, w)
+				recovery = mech.NewRecovery()
 				send(map[string]string{"type": "ready", "name": "r1ver"})
 			case "obs":
 				latest = raw
@@ -103,6 +105,9 @@ func main() {
 		}
 		panicsBefore := brain.Panics
 		action := brain.Act(&o)
+		if brain.Panics == panicsBefore {
+			action = recovery.Apply(brain, &o, action)
+		}
 		if brain.Panics > panicsBefore {
 			fmt.Fprintf(os.Stderr, "act() failed: giddy recovered panic tick=%d count=%d\n", o.Tick, brain.Panics)
 		}
