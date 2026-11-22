@@ -123,19 +123,19 @@ func (c *Controller) step(o wire.Observation, yaw float64, emergency bool) wire.
 	return best
 }
 
-func (c *Controller) recover(o wire.Observation) (move wire.Vec2, covered, escape bool) {
+func (c *Controller) recover(o wire.Observation, bearingOnly bool) (move wire.Vec2, covered, escape bool) {
 	s := o.Self
 	if !s.InZone || (!c.recovering && s.HP >= .45*s.MaxHP) {
 		return wire.Vec2{}, false, false
 	}
-	if c.coverValid && (margin(o.Zone, c.cover, o.T, o.T+c.travel(o, distance(s.Pos, c.cover))) <= 0 ||
+	if c.coverValid && (bearingOnly || margin(o.Zone, c.cover, o.T, o.T+c.travel(o, distance(s.Pos, c.cover))) <= 0 ||
 		c.exposure(o, c.cover) > 0) {
 		c.coverValid = false
 	}
 	if !c.coverValid {
 		exposure := c.exposure(o, s.Pos)
 		quietFor := o.T - max(c.lastDamage, c.lastDealt)
-		if exposure == 0 && (quietFor >= c.stat(s, "regen_delay") || (c.recovering && len(o.Mechs) == 0)) {
+		if !bearingOnly && exposure == 0 && (quietFor >= c.stat(s, "regen_delay") || (c.recovering && len(o.Mechs) == 0)) {
 			c.cover, c.coverValid = s.Pos, true
 		} else {
 			best := exposure
@@ -170,24 +170,34 @@ func (c *Controller) recover(o wire.Observation) (move wire.Vec2, covered, escap
 	}
 	c.recovering = true
 	if distance(s.Pos, c.cover) <= 1 {
-		return wire.Vec2{}, true, false
+		if !bearingOnly && c.exposure(o, s.Pos) == 0 {
+			return wire.Vec2{}, true, false
+		}
+		// An imperfect destination must not become a stationary recovery hold.
+		c.coverValid = false
+		return wire.Vec2{}, false, false
 	}
-	return c.follow(o, goal{kind: "cover"}, c.cover), true, false
+	return c.follow(o, goal{kind: "cover"}, c.cover), false, true
 }
 
 func (c *Controller) exposure(o wire.Observation, p wire.Vec3) int {
 	p[2] += c.stat(o.Self, "height") / 2
 	n := 0
 	for _, m := range o.Mechs {
-		q := m.Pos
-		if m.Kind == "npc" {
-			q[2] += c.cfg.NPC["height"] / 2
-		} else {
-			q[2] += c.cfg.Mech["muzzle_height"] * (1 + float64(m.Cubes)*c.cfg.Cubes.SizePerCube)
-		}
+		q := c.threatOrigin(m)
 		if c.world.ClearShot(q, p) {
 			n++
 		}
 	}
 	return n
+}
+
+func (c *Controller) threatOrigin(m wire.Actor) wire.Vec3 {
+	q := m.Pos
+	if m.Kind == "npc" {
+		q[2] += c.cfg.NPC["height"] / 2
+	} else {
+		q[2] += c.cfg.Mech["muzzle_height"] * (1 + float64(m.Cubes)*c.cfg.Cubes.SizePerCube)
+	}
+	return q
 }

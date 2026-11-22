@@ -24,17 +24,21 @@ func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
 	var best shot
 	found := false
 	for _, p := range o.Mechs {
-		stats := c.cfg.Mech
-		if p.Kind == "npc" {
-			stats = c.cfg.NPC
-		}
-		scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
-		s, ok := c.solve(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP)
+		s, ok := c.actorShot(o, p)
 		if ok && (!found || c.prefer(s, best)) {
 			best, found = s, true
 		}
 	}
 	return best, found
+}
+
+func (c *Controller) actorShot(o wire.Observation, p wire.Actor) (shot, bool) {
+	stats := c.cfg.Mech
+	if p.Kind == "npc" {
+		stats = c.cfg.NPC
+	}
+	scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
+	return c.solve(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP)
 }
 
 func (c *Controller) prefer(a, b shot) bool {

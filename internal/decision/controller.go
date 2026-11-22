@@ -14,6 +14,7 @@ type goal struct {
 }
 
 type Controller struct {
+	threats      [16]damageRecord
 	cfg          wire.Config
 	world        *arena.Map
 	period       float64
@@ -52,6 +53,7 @@ func (c *Controller) update(o wire.Observation) {
 	for _, e := range o.Events {
 		switch e.Type {
 		case "damaged":
+			c.remember(o, e)
 			c.lastDamage = o.T
 			c.coverValid = false
 		case "hit":
@@ -80,29 +82,29 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	c.update(o)
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
-	shootingCrate := false
 	enemy, hasEnemy := c.bestEnemy(o)
+	normal := engagement{aim: c.scan(o)}
 	if hasEnemy {
-		a.Aim = enemy.aim
-	} else {
-		a.Aim = c.scan(o)
+		normal = engagement{shot: enemy, canShoot: true, id: enemy.id, aim: enemy.aim}
 	}
-
-	if dest, urgent := c.zoneGoal(o); urgent {
+	intent := c.engagement(o, normal)
+	a.Aim = normal.aim
+	plannedShot, fire := enemy, false
+	shootingCrate, coveredNow, recoveringMove, adjustMove := false, false, false, false
+	dest, urgent := c.zoneGoal(o)
+	if urgent {
 		a.Move = c.follow(o, goal{kind: "zone"}, dest)
 		a.Boost = a.Move != (wire.Vec2{}) && !s.InZone && s.Grounded &&
 			s.Energy >= 2*c.stat(s, "boost_drain")*c.period
-		if hasEnemy && !c.recovering {
-			c.fire(o, enemy, &a)
-		}
-	} else if move, covered, escape := c.recover(o); covered || escape {
+		fire = hasEnemy
+	} else if move, covered, escape := c.recover(o, intent.bearingOnly); covered || escape {
 		a.Move = move
-		if escape && hasEnemy {
-			c.fire(o, enemy, &a)
-		}
+		coveredNow, recoveringMove, adjustMove = covered, true, escape
+		fire = escape && hasEnemy
 	} else if hasEnemy && enemy.time <= c.period*2 {
+		adjustMove = true
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a)
+		fire = true
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
@@ -114,14 +116,15 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			if shot, ok := c.solve(o, r.id, r.pos, wire.Vec3{}, c.cfg.Crates["height"], c.cfg.Crates["radius"], 0); ok && shot.time <= max(s.Weapons[0].Reload, 1) {
 				shootingCrate = true
 				a.Aim = shot.aim
-				c.fire(o, shot, &a)
+				plannedShot, fire = shot, true
 				a.Move = wire.Vec2{}
 				c.target = r.goal
 			}
 		}
 	} else if hasEnemy {
+		adjustMove = true
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a)
+		fire = true
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
@@ -129,11 +132,30 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, goal{kind: "scout", id: int(phase)}, dest)
 	}
 
+	// Keep the original movement in the candidate set. Resolve the actual
+	// engagement before emitting either trigger, including on crate actions.
+	if intent.priority {
+		a.Aim, a.Take = intent.aim, nil
+		plannedShot, fire = intent.shot, intent.canShoot && !coveredNow
+		shootingCrate, adjustMove = false, !coveredNow
+		if !urgent && !recoveringMove {
+			c.target, c.route = goal{kind: "watch", id: intent.id}, nil
+			if intent.canShoot {
+				c.target.kind = "enemy"
+			}
+		}
+	}
+	if !urgent && s.Grounded && (adjustMove || len(o.Projectiles) > 0) {
+		a.Move = c.chooseMove(o, a.Move, intent, adjustMove)
+	}
+	if fire {
+		c.fire(o, plannedShot, &a)
+	}
 	for i, w := range s.Weapons {
 		if w == nil || w.Kind != "gun" || w.Reload > 0 || a.Fire[i] {
 			continue
 		}
-		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
+		if w.Ammo == 0 || (!hasEnemy && !intent.priority && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
 			a.Reload = true
 		}
 	}
