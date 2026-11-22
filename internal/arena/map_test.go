@@ -100,3 +100,27 @@ func TestStepHeight(t *testing.T) {
 		t.Fatal("high step accepted")
 	}
 }
+
+func TestGroundSegmentRoofRequiresContinuousCenterSupport(t *testing.T) {
+	m := fixture(t)
+	for _, tc := range []struct {
+		name     string
+		from, to wire.Vec3
+		want     bool
+	}{
+		{"solid interior", wire.Vec3{21, 14, 7}, wire.Vec3{21, 15, 7}, true},
+		{"outside edge", wire.Vec3{20.2, 15, 7}, wire.Vec3{19.8, 15, 7}, false},
+		{"inside hole", wire.Vec3{21.8, 25, 7}, wire.Vec3{22.2, 25, 7}, false},
+		{"crosses hole", wire.Vec3{21.8, 25, 7}, wire.Vec3{28.2, 25, 7}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !m.Segment(tc.from, tc.to, 1, 4, 1.5, 50) {
+				t.Fatal("legacy passability changed")
+			}
+			z, ok := m.GroundSegment(tc.from, tc.to, 1, 4, 1.5, 50)
+			if ok != tc.want || (ok && z != 7) {
+				t.Fatalf("ground forecast z=%g accepted=%v, want accepted=%v", z, ok, tc.want)
+			}
+		})
+	}
+}

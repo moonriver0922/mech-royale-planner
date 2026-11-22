@@ -256,12 +256,37 @@ func (m *Map) ClearShot(a, b wire.Vec3) bool {
 	})
 }
 func (m *Map) Segment(a, b wire.Vec3, r, height, step, slope float64) bool {
-	if r < 0 || height <= 0 || step < 0 || !m.within(a, r) || !m.within(b, r) {
+	_, ok := m.groundSegment(a, b, r, height, step, slope, false)
+	return ok
+}
+
+// GroundSegment returns a support elevation for a grounded movement forecast.
+// It rejects edge transitions that would require predicting a slide or fall.
+func (m *Map) GroundSegment(a, b wire.Vec3, r, height, step, slope float64) (float64, bool) {
+	return m.groundSegment(a, b, r, height, step, slope, true)
+}
+
+// A center crossing an outer or hole boundary can leave the roof even when
+// both ends of the step are inside the same concave footprint.
+func (p *prism) supportsCenter(a, b wire.Vec3) bool {
+	if !p.contains(a[0], a[1]) || edgeHit(p.Ring, a, b, 0) {
 		return false
+	}
+	for _, hole := range p.Holes {
+		if edgeHit(hole, a, b, 0) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Map) groundSegment(a, b wire.Vec3, r, height, step, slope float64, requireSupport bool) (float64, bool) {
+	if r < 0 || height <= 0 || step < 0 || !m.within(a, r) || !m.within(b, r) {
+		return a[2], false
 	}
 	feet := a[2]
 	maxGrade := math.Tan(slope * math.Pi / 180)
-	return m.cells(a, b, func(l, h wire.Vec3) bool {
+	ok := m.cells(a, b, func(l, h wire.Vec3) bool {
 		z0 := m.GroundHeight(l[0], l[1])
 		z1 := m.GroundHeight(h[0], h[1])
 		mid := mix(l, h, .5)
@@ -272,7 +297,7 @@ func (m *Map) Segment(a, b wire.Vec3, r, height, step, slope float64) bool {
 		if maxRise > maxGrade*length+1e-6 && z0 >= feet-.05 {
 			return false
 		}
-		floor := z1
+		floor, supportedFloor := z1, z1
 		ok := m.nearby(l, h, r, func(p *prism) bool {
 			if p.Top < math.Min(z0, z1)-.01 || p.Base >= math.Max(feet, math.Max(z0, z1))+height || !p.hits(l, h, r) {
 				return true
@@ -282,10 +307,14 @@ func (m *Map) Segment(a, b wire.Vec3, r, height, step, slope float64) bool {
 			}
 			if p.hits(h, h, r) {
 				floor = math.Max(floor, p.Top)
+				if requireSupport && p.Top > supportedFloor && p.supportsCenter(l, h) {
+					supportedFloor = p.Top
+				}
 			}
 			return true
 		})
 		feet = floor
-		return ok
+		return ok && (!requireSupport || supportedFloor == floor)
 	})
+	return feet, ok
 }

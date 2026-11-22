@@ -139,6 +139,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			a.Reload = true
 		}
 	}
+	a = c.defendProjectiles(o, a)
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})
 	return a
