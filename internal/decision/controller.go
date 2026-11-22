@@ -83,6 +83,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
 	shootingCrate := false
+	passiveWalk := false
 	enemy, hasEnemy := c.bestEnemy(o)
 	if hasEnemy {
 		a.Aim = enemy.aim
@@ -98,6 +99,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if move, covered, escape := c.recover(o); covered || escape {
+		passiveWalk = true
 		a.Move = move
 		if escape && hasEnemy {
 			c.fire(o, enemy, &a, false)
@@ -105,6 +107,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	} else if hasEnemy && enemy.time <= c.period*2 {
 		c.engageWithGrowth(o, enemy, &a)
 	} else if r, ok := c.resource(o); ok {
+		passiveWalk = true
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
 		case "weapon":
@@ -123,6 +126,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	} else if hasEnemy {
 		c.engageWithGrowth(o, enemy, &a)
 	} else {
+		passiveWalk = true
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
 		dest := c.onGround(center[0]+math.Cos(phase*2.4)*radius*.55, center[1]+math.Sin(phase*2.4)*radius*.55)
@@ -136,6 +140,9 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
 			a.Reload = true
 		}
+	}
+	if passiveWalk {
+		a.Move = c.navigationMove(o, a)
 	}
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})

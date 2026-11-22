@@ -108,17 +108,25 @@ func (c *Controller) follow(o wire.Observation, g goal, dest wire.Vec3) wire.Vec
 	return wire.Vec2{m[0] * scale, m[1] * scale}
 }
 
-func (c *Controller) step(o wire.Observation, yaw float64, emergency bool) wire.Vec2 {
+var stepTurns = [...]float64{0, .5, -.5, 1.1, -1.1, 1.7, -1.7, math.Pi}
+
+// Check a unit heading at the ordinary three-decision lookahead distance.
+func (c *Controller) forwardStep(o wire.Observation, unit wire.Vec2) (room float64, clear bool) {
 	p := o.Self.Pos
 	l := 3 * c.stat(o.Self, "walk_speed") * c.period
+	q := c.onGround(p[0]+l*unit[0], p[1]+l*unit[1])
+	return margin(o.Zone, q, o.T, o.T+3*c.period), c.walk(o.Self, p, q)
+}
+
+func (c *Controller) step(o wire.Observation, yaw float64, emergency bool) wire.Vec2 {
+	p := o.Self.Pos
 	current := margin(o.Zone, p, o.T, o.T)
 	best := wire.Vec2{}
 	bestRoom := math.Inf(-1)
-	for _, turn := range [...]float64{0, .5, -.5, 1.1, -1.1, 1.7, -1.7, math.Pi} {
+	for _, turn := range stepTurns {
 		x, y := math.Cos(yaw+turn), math.Sin(yaw+turn)
-		q := c.onGround(p[0]+l*x, p[1]+l*y)
-		room := margin(o.Zone, q, o.T, o.T+3*c.period)
-		if !c.walk(o.Self, p, q) {
+		room, clear := c.forwardStep(o, wire.Vec2{x, y})
+		if !clear {
 			continue
 		}
 		if (o.Self.InZone && room >= 0) || (!o.Self.InZone && room > current) {
