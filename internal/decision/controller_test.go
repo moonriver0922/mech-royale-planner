@@ -66,9 +66,9 @@ func TestZonePrecedesInRangeLoot(t *testing.T) {
 
 func TestRecoveryWaitsWithoutFiring(t *testing.T) {
 	c, o := sample(t, true)
-	o.Self.HP = 400
+	o.Self.HP = 300
 	o.Mechs = []wire.Actor{{ID: 9, Pos: wire.Vec3{20, 0, 0}}}
-	for _, hp := range []float64{400, 600} {
+	for _, hp := range []float64{300, 600} {
 		o.Self.HP = hp
 		o.T++
 		a := c.Decide(o)

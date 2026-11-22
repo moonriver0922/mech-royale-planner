@@ -107,7 +107,7 @@ func TestGrowthNonEligibleLeavesOriginalCombat(t *testing.T) {
 			o.Zone.Radius = 11
 			o.Zone.NextRadius = 9
 		}},
-		{"uncovered recovery", func(c *Controller, o *wire.Observation) { o.Self.HP = 390 }},
+		{"uncovered recovery", func(c *Controller, o *wire.Observation) { o.Self.HP = 300 }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, o := growthScene(t, false)
@@ -125,7 +125,7 @@ func TestGrowthDoesNotDisplaceCoveredRecoveryOrWalkThroughWall(t *testing.T) {
 	for _, covered := range []bool{false, true} {
 		c, o := growthScene(t, true)
 		if covered {
-			o.Self.HP = 390
+			o.Self.HP = 300
 		} else {
 			o.Mechs[0].Pos = wire.Vec3{0, 50, 0}
 			o.Self.Aim[0] = math.Pi / 2
