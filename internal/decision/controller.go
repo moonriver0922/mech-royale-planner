@@ -82,7 +82,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	c.observeLaser(o)
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
-	shootingCrate := false
+	shootingCrate, activePlayerCombat := false, false
 	enemy, hasEnemy := c.bestEnemy(o)
 	if hasEnemy {
 		a.Aim = enemy.aim
@@ -103,6 +103,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
+		activePlayerCombat = enemy.player
 		a.Move = c.engage(o, enemy)
 		c.fire(o, enemy, &a, true)
 	} else if r, ok := c.resource(o); ok {
@@ -122,6 +123,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			}
 		}
 	} else if hasEnemy {
+		activePlayerCombat = enemy.player
 		a.Move = c.engage(o, enemy)
 		c.fire(o, enemy, &a, true)
 	} else {
@@ -140,6 +142,9 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		}
 	}
 	c.rememberLaser(o, a)
+	if activePlayerCombat && !a.Boost {
+		a.Boost = c.burstSafer(o, a)
+	}
 	c.moving = a.Move != (wire.Vec2{})
 	return a
 }

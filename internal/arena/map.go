@@ -289,3 +289,33 @@ func (m *Map) Segment(a, b wire.Vec3, r, height, step, slope float64) bool {
 		return ok
 	})
 }
+
+// SupportedStep projects one short grounded move. A center leaving its
+// supporting roof (or crossing a roof hole) can fall or slide on its edge.
+// Decline those transitions instead of extrapolating a grounded trajectory.
+func (m *Map) SupportedStep(a, b wire.Vec3, radius, height, step, slope float64) (wire.Vec3, bool) {
+	if !m.Segment(a, b, radius, height, step, slope) {
+		return b, false
+	}
+	const zTolerance = .03 // observations round map coordinates to centimeters
+	z0, z1 := m.GroundHeight(a[0], a[1]), m.GroundHeight(b[0], b[1])
+	terrainLow := min(z0, z1)
+	ok := m.nearby(a, b, radius, func(p *prism) bool {
+		if p.Top > a[2]+step+zTolerance || p.Top < terrainLow-zTolerance || !p.hits(a, b, radius) {
+			return true
+		}
+		onA, onB := p.contains(a[0], a[1]), p.contains(b[0], b[1])
+		if !onA || !onB || edgeHit(p.Ring, a, b, 0) {
+			return false
+		}
+		for _, hole := range p.Holes {
+			if edgeHit(hole, a, b, 0) {
+				return false
+			}
+		}
+		z0, z1 = max(z0, p.Top), max(z1, p.Top)
+		return true
+	})
+	b[2] = z1
+	return b, ok && math.Abs(a[2]-z0) <= zTolerance && z0-z1 <= step+zTolerance
+}

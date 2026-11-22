@@ -12,6 +12,7 @@ type shot struct {
 	aim                           wire.Vec2
 	time, distance, radius, hp    float64
 	height                        float64
+	player                        bool
 }
 
 func (c *Controller) weapon(w *wire.Weapon, name string) float64 {
@@ -31,6 +32,7 @@ func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
 		}
 		scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
 		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP, true)
+		s.player = p.Kind == "mech"
 		if !ok && c.laser.held && c.target == (goal{"enemy", p.ID}) {
 			// The actor is still reported. Wait briefly for a clear ray instead
 			// of dropping a charged trigger the instant an obstacle intervenes.
