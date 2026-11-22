@@ -22,26 +22,33 @@ func (c *Controller) weapon(w *wire.Weapon, name string) float64 {
 }
 
 func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
-	var best, obscured shot
-	found, retainCharge := false, false
+	var best, charged, threat shot
+	found, observedCharge := false, false
+	highScore := 0.
 	for _, p := range o.Mechs {
-		stats := c.cfg.Mech
-		if p.Kind == "npc" {
-			stats = c.cfg.NPC
-		}
-		scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
-		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP, true)
-		if !ok && c.laser.held && c.target == (goal{"enemy", p.ID}) {
-			// The actor is still reported. Wait briefly for a clear ray instead
-			// of dropping a charged trigger the instant an obstacle intervenes.
-			obscured, retainCharge = s, true
+		height, radius := c.actorSize(p)
+		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, height, radius, p.HP, true)
+		if c.laser.held && c.target == (goal{"enemy", p.ID}) {
+			charged, observedCharge = s, true
 		}
 		if ok && (!found || c.prefer(s, best)) {
 			best, found = s, true
 		}
+		if ok && p.Kind == "mech" && playerID(s.id) && c.pressure.total[s.id] > 0 {
+			score := c.pressure.total[s.id] / max(c.period, c.killTime(o, s))
+			if score > highScore || (score > 0 && score == highScore && c.preferPressureTie(s, threat)) {
+				threat, highScore = s, score
+			}
+		}
 	}
-	if !found && retainCharge {
-		return obscured, true
+	if !found && observedCharge {
+		return charged, true
+	}
+	if highScore > 0 && !c.finishingVolley(o, best) {
+		if observedCharge && threat.id != charged.id && !c.clearRelease(o, threat) {
+			return charged, true
+		}
+		return threat, true
 	}
 	return best, found
 }
