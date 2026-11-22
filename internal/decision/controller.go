@@ -103,8 +103,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
-		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a, true)
+		c.engageWithGrowth(o, enemy, &a)
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
@@ -122,8 +121,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			}
 		}
 	} else if hasEnemy {
-		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a, true)
+		c.engageWithGrowth(o, enemy, &a)
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
