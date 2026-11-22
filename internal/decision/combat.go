@@ -24,6 +24,9 @@ func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
 	var best shot
 	found := false
 	for _, p := range o.Mechs {
+		if c.eliminated(p.ID) {
+			continue
+		}
 		s, ok := c.actorShot(o, p)
 		if ok && (!found || c.prefer(s, best)) {
 			best, found = s, true

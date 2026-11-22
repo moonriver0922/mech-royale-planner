@@ -10,6 +10,11 @@ import (
 // never establish a player to acquire. Only an observed bearing is stored.
 type damageRecord struct {
 	damage, rearDamage, last, bearing, acquireUntil float64
+	eliminated                                      bool
+}
+
+func (c *Controller) eliminated(id int) bool {
+	return id >= 0 && id < len(c.threats) && c.threats[id].eliminated
 }
 
 func (c *Controller) remember(o wire.Observation, e wire.Event) {
@@ -17,6 +22,9 @@ func (c *Controller) remember(o wire.Observation, e wire.Event) {
 		return
 	}
 	r := &c.threats[*e.By]
+	if r.eliminated {
+		return
+	}
 	decay := math.Exp(-max(0, o.T-r.last) / 1.1)
 	r.damage = r.damage*decay + e.Amount
 	r.rearDamage *= decay
@@ -32,7 +40,6 @@ func (c *Controller) remember(o wire.Observation, e wire.Event) {
 type engagement struct {
 	shot                            shot
 	canShoot, priority, bearingOnly bool
-	id                              int
 	aim                             wire.Vec2
 }
 
@@ -54,12 +61,12 @@ func (c *Controller) engagement(o wire.Observation, normal engagement) engagemen
 			}
 			s, canShoot := c.actorShot(o, actor)
 			if canShoot {
-				return engagement{shot: s, canShoot: true, priority: true, id: id, aim: s.aim}
+				return engagement{shot: s, canShoot: true, priority: true, aim: s.aim}
 			}
 			v := sub(actor.Pos, o.Self.Pos)
-			return engagement{priority: true, id: id, aim: wire.Vec2{math.Atan2(v[1], v[0]), 0}}
+			return engagement{priority: true, aim: wire.Vec2{math.Atan2(v[1], v[0]), 0}}
 		}
-		return engagement{priority: true, bearingOnly: true, id: id, aim: wire.Vec2{c.threats[id].bearing, 0}}
+		return engagement{priority: true, bearingOnly: true, aim: wire.Vec2{c.threats[id].bearing, 0}}
 	}
 	return normal
 }

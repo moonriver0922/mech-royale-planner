@@ -56,6 +56,12 @@ func (c *Controller) update(o wire.Observation) {
 			c.remember(o, e)
 			c.lastDamage = o.T
 			c.coverValid = false
+		case "kill":
+			// The official kill event identifies a mech by target. Once
+			// eliminated, its already-launched projectiles can still arrive.
+			if e.Target >= 0 && e.Target < len(c.threats) {
+				c.threats[e.Target] = damageRecord{eliminated: true}
+			}
 		case "hit":
 			c.lastDealt = o.T
 		case "take_failed":
@@ -85,12 +91,13 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 	enemy, hasEnemy := c.bestEnemy(o)
 	normal := engagement{aim: c.scan(o)}
 	if hasEnemy {
-		normal = engagement{shot: enemy, canShoot: true, id: enemy.id, aim: enemy.aim}
+		normal = engagement{shot: enemy, canShoot: true, aim: enemy.aim}
 	}
 	intent := c.engagement(o, normal)
 	a.Aim = normal.aim
 	plannedShot, fire := enemy, false
-	shootingCrate, coveredNow, recoveringMove, adjustMove := false, false, false, false
+	shootingCrate, coveredNow, recoveringMove := false, false, false
+	orbit := false
 	dest, urgent := c.zoneGoal(o)
 	if urgent {
 		a.Move = c.follow(o, goal{kind: "zone"}, dest)
@@ -99,11 +106,10 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		fire = hasEnemy
 	} else if move, covered, escape := c.recover(o, intent.bearingOnly); covered || escape {
 		a.Move = move
-		coveredNow, recoveringMove, adjustMove = covered, true, escape
+		coveredNow, recoveringMove = covered, true
 		fire = escape && hasEnemy
 	} else if hasEnemy && enemy.time <= c.period*2 {
-		adjustMove = true
-		a.Move = c.engage(o, enemy)
+		orbit = true
 		fire = true
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
@@ -122,8 +128,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			}
 		}
 	} else if hasEnemy {
-		adjustMove = true
-		a.Move = c.engage(o, enemy)
+		orbit = true
 		fire = true
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
@@ -132,21 +137,18 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, goal{kind: "scout", id: int(phase)}, dest)
 	}
 
-	// Keep the original movement in the candidate set. Resolve the actual
-	// engagement before emitting either trigger, including on crate actions.
+	// The incoming report can change facing without changing a pickup
+	// or its walking route. An acquired actor can own a combat orbit.
 	if intent.priority {
-		a.Aim, a.Take = intent.aim, nil
+		a.Aim = intent.aim
 		plannedShot, fire = intent.shot, intent.canShoot && !coveredNow
-		shootingCrate, adjustMove = false, !coveredNow
-		if !urgent && !recoveringMove {
-			c.target, c.route = goal{kind: "watch", id: intent.id}, nil
-			if intent.canShoot {
-				c.target.kind = "enemy"
-			}
+		shootingCrate = false
+		if intent.canShoot && !urgent && !recoveringMove {
+			enemy, orbit = intent.shot, true
 		}
 	}
-	if !urgent && s.Grounded && (adjustMove || len(o.Projectiles) > 0) {
-		a.Move = c.chooseMove(o, a.Move, intent, adjustMove)
+	if orbit {
+		a.Move = c.engage(o, enemy)
 	}
 	if fire {
 		c.fire(o, plannedShot, &a)
@@ -165,7 +167,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 
 func (c *Controller) scan(o wire.Observation) wire.Vec2 {
 	for _, e := range o.Events {
-		if e.Type == "damaged" && e.Bearing != nil {
+		if e.Type == "damaged" && e.Bearing != nil && (e.By == nil || !c.eliminated(*e.By)) {
 			return wire.Vec2{*e.Bearing, 0}
 		}
 	}

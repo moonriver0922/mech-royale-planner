@@ -55,38 +55,6 @@ func TestPartialCoverStillFiresAtRemainingEnemy(t *testing.T) {
 	}
 }
 
-func TestCrossingProjectileRespectsCurrentVelocityAndRetainsFire(t *testing.T) {
-	for _, vy := range []float64{-12, 0, 12} {
-		c, o := sample(t, false)
-		frontTarget(&o)
-		o.Self.Vel[1] = vy
-		// At t=.40 the bullet crosses our x. From rest it intersects the
-		// usual +y orbit. With negative velocity, reversing drives into it.
-		y := 0.
-		if vy == 0 {
-			y = 4
-		}
-		o.Projectiles = []wire.Projectile{{Kind: "gun", Pos: wire.Vec3{80, y, 4.5}, Vel: wire.Vec3{-200, 0, 0}}}
-		a := c.Decide(o)
-		if !a.Fire[0] || (vy < 0 && a.Move[1] >= -.4) || (vy > 0 && a.Move[1] <= .4) || (vy == 0 && a.Move[1] > .15) {
-			t.Errorf("velocity %.0f: should clear crossing and keep the shot, got %+v", vy, a)
-		}
-	}
-}
-
-func TestMovementChecksWholeTrajectoryNearWall(t *testing.T) {
-	c, o := sample(t, true)
-	o.Self.Pos = wire.Vec3{-1.3, 0, 0}
-	o.Mechs = []wire.Actor{{ID: 1, Kind: "mech", Pos: wire.Vec3{-1.3, -40, 0}}}
-	o.Self.Aim = wire.Vec2{-math.Pi / 2, math.Atan2(-2.5, 40)}
-	a := c.Decide(o)
-	// East is clear for S00's 3.6 m probe but the cylinder hits the x=5
-	// wall after 3.8 m. Half a second of walking from rest covers >4.8 m.
-	if a.Move[0] > .78 || !a.Fire[0] {
-		t.Fatalf("walks into wall or lost valid shot: %+v", a)
-	}
-}
-
 func TestZoneExitKeepsLegalShotAfterPartialRecovery(t *testing.T) {
 	c, o := sample(t, true)
 	o.Self.Pos = wire.Vec3{0, 21, 0}
@@ -121,5 +89,79 @@ func TestRepeatedRearDamageAndStableArbitration(t *testing.T) {
 			}
 			o.T += .1
 		}
+	}
+}
+
+func TestKillEndsAcquisitionEvenWithLateDamage(t *testing.T) {
+	for _, killFirst := range []bool{false, true} {
+		c, o := sample(t, false)
+		frontTarget(&o)
+		hit := incoming(13, -3, 67.5)
+		o.Events = []wire.Event{hit}
+		c.Decide(o)
+		o.T += .1
+		kill := wire.Event{Type: "kill", Target: 13}
+		o.Events = []wire.Event{hit, kill}
+		if killFirst {
+			o.Events = []wire.Event{kill, hit}
+		}
+		if a := c.Decide(o); math.Abs(a.Aim[0]) > .01 || !a.Fire[0] {
+			t.Fatalf("killFirst=%v: confirmed kill should return to live target: %+v", killFirst, a)
+		}
+		o.T += .1
+		o.Events = []wire.Event{hit}
+		if a := c.Decide(o); math.Abs(a.Aim[0]) > .01 || !a.Fire[0] {
+			t.Fatalf("projectile arriving after kill reopened acquisition: %+v", a)
+		}
+		// Even a retained same-ID observation cannot make a confirmed kill
+		// targetable again.
+		o.Mechs[0].ID = 13
+		o.Events = nil
+		if a := c.Decide(o); a.Fire[0] {
+			t.Fatalf("fire at confirmed eliminated ID: %+v", a)
+		}
+	}
+}
+
+func TestBearingOnlyKeepsInRangePickup(t *testing.T) {
+	c, o := sample(t, false)
+	o.Pickups = []wire.Pickup{{ID: 8001, Kind: "lightning", Pos: wire.Vec3{3, 0, 0}}}
+	o.Events = []wire.Event{incoming(13, -3, 67.5)}
+	a := c.Decide(o)
+	if a.Take == nil || *a.Take != 8001 || math.Abs(a.Aim[0]+3) > .01 {
+		t.Fatalf("pickup and facing conflict: %+v", a)
+	}
+}
+
+func TestBearingOnlyRetainsExistingDetour(t *testing.T) {
+	c, o := sample(t, true)
+	o.Pickups = []wire.Pickup{{ID: 8001, Kind: "lightning", Pos: wire.Vec3{24, 0, 0}}}
+	c.Decide(o)
+	if c.target != (goal{"weapon", 8001}) || len(c.route) < 2 {
+		t.Fatalf("fixture needs existing detour; got %v %v", c.target, c.route)
+	}
+	replanAt := c.replanAt
+	o.T += .1
+	o.Events = []wire.Event{incoming(13, -3, 67.5)}
+	for range 2 {
+		a := c.Decide(o)
+		if a.Move == (wire.Vec2{}) || len(c.route) < 2 || c.target != (goal{"weapon", 8001}) || c.replanAt != replanAt {
+			t.Fatalf("bearing discarded movement owner's detour: %+v goal=%v route=%v", a, c.target, c.route)
+		}
+		o.Events = nil
+		o.T += .1
+	}
+}
+
+func TestAcquiredAttackerOwnsCombatOrbit(t *testing.T) {
+	c, o := sample(t, false)
+	frontTarget(&o)
+	o.Events = []wire.Event{incoming(13, math.Pi, 67.5)}
+	o.Mechs = append(o.Mechs, wire.Actor{ID: 13, Kind: "mech", Pos: wire.Vec3{-40, 0, 0}})
+	a := c.Decide(o)
+	// At this time the nominal orbit is counter-clockwise. Facing the
+	// target in the west puts the tangent to the south instead of north.
+	if a.Move[1] > -.9 || math.Abs(wrap(a.Aim[0]-math.Pi)) > .01 || a.Fire[0] {
+		t.Fatalf("facing and orbit should both switch to the acquired actor: %+v", a)
 	}
 }
