@@ -3,6 +3,7 @@ package decision
 import (
 	"math"
 	"ownbot/internal/wire"
+	"reflect"
 	"testing"
 )
 
@@ -149,8 +150,8 @@ func TestLaserPickupOpportunityAndCurrentRadius(t *testing.T) {
 	}
 	o.Pickups[0].Pos = wire.Vec3{}
 	o.Cubes = []wire.Cube{{ID: 22, Pos: wire.Vec3{14, 0, 0}}}
-	if a := c.Decide(o); a.Take != nil || c.target.kind != "cube" {
-		t.Fatalf("ignored 1.65s equip cost: %+v %+v", a, c.target)
+	if a := c.Decide(o); a.Take == nil || *a.Take != 810 || c.target.kind != "cube" || a.Move[0] <= 0 {
+		t.Fatalf("expected pickup while continuing toward cube: %+v %+v", a, c.target)
 	}
 	o.Cubes = nil
 	o.Self.Weapons[1] = &wire.Weapon{Kind: "lightning"}
@@ -311,5 +312,83 @@ func TestUnsafeLaserStartYieldsToInwardCube(t *testing.T) {
 	a := c.Decide(o)
 	if c.target != (goal{"cube", 5}) || a.Move[0] >= 0 || a.Fire != [2]bool{} {
 		t.Fatalf("expected inward cube movement while neither weapon can fire: action=%+v goal=%+v", a, c.target)
+	}
+}
+
+func TestLaserPickupAlongsideGunshot(t *testing.T) {
+	c, o := laserScene(t, false)
+	o.Self.Weapons[1] = nil
+	o.Offer = &wire.Offer{Choices: []wire.Choice{{ID: "unknown"}, {ID: "plating"}}}
+	base := NewController(c.cfg, c.world).Decide(o)
+	if !base.Fire[0] || base.Fire[1] || base.Move == (wire.Vec2{}) || base.Pick == nil || *base.Pick != 1 {
+		t.Fatalf("expected walking, firing gun and choosing upgrade: %+v", base)
+	}
+	o.Pickups = []wire.Pickup{
+		{ID: 8009, Kind: "laser", Pos: wire.Vec3{4, 0, 0}},
+		{ID: 8002, Kind: "laser", Pos: wire.Vec3{3, 0, 4}},
+		{ID: 8001, Kind: "laser", Pos: wire.Vec3{-3, 0, 4}},
+	}
+	a := c.Decide(o)
+	if a.Take == nil || *a.Take != 8001 {
+		t.Fatalf("expected nearest laser with lowest tied ID, got %+v", a)
+	}
+	a.Take = nil
+	if !reflect.DeepEqual(base, a) {
+		t.Fatalf("pickup changed another action: with=%+v without=%+v", a, base)
+	}
+	advance(&o, 2)
+	o.Self.Weapons[1] = &wire.Weapon{Kind: "laser", Cooldown: 1.65}
+	if a := c.Decide(o); a.Take != nil || a.Fire[1] {
+		t.Fatalf("must wait for observed equip cooldown: %+v", a)
+	}
+}
+
+func TestLaserPickupDuringCombatHonorsEligibility(t *testing.T) {
+	for _, tt := range []struct {
+		name, kind, primary, secondary string
+		pos                            wire.Vec3
+		failed                         bool
+	}{
+		{name: "beyond horizontal", kind: "laser", pos: wire.Vec3{4.01, 0, 0}},
+		{name: "above reach", kind: "laser", pos: wire.Vec3{0, 0, 4.01}},
+		{name: "filled slot", kind: "laser", secondary: "lightning"},
+		{name: "same primary", kind: "laser", primary: "laser"},
+		{name: "other pickup", kind: "mortar"},
+		{name: "recently failed", kind: "laser", failed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, o := laserScene(t, false)
+			o.Self.Weapons[1] = nil
+			if tt.primary != "" {
+				o.Self.Weapons[0] = &wire.Weapon{Kind: tt.primary}
+			}
+			if tt.secondary != "" {
+				o.Self.Weapons[1] = &wire.Weapon{Kind: tt.secondary}
+			}
+			o.Pickups = []wire.Pickup{{ID: 8001, Kind: tt.kind, Pos: tt.pos}}
+			if tt.failed {
+				o.Events = []wire.Event{{Type: "take_failed", ID: []byte("8001")}}
+			}
+			if a := c.Decide(o); a.Take != nil {
+				t.Fatalf("unexpected pickup: %+v", a)
+			}
+			if tt.failed {
+				o.Events = nil
+				advance(&o, 20)
+				if a := c.Decide(o); a.Take == nil || *a.Take != 8001 {
+					t.Fatalf("retry still suppressed: %+v", a)
+				}
+			}
+		})
+	}
+}
+
+func TestOpportunisticLaserPreservesChosenPickup(t *testing.T) {
+	c, o := laserScene(t, false)
+	o.Mechs = nil
+	o.Self.Weapons[1] = nil
+	o.Pickups = []wire.Pickup{{ID: 8001, Kind: "laser", Pos: o.Self.Pos}, {ID: 8002, Kind: "lightning", Pos: wire.Vec3{1, 0, 0}}}
+	if a := c.Decide(o); a.Take == nil || *a.Take != 8002 {
+		t.Fatalf("overrode selected lightning pickup: %+v", a)
 	}
 }

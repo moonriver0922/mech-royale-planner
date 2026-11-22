@@ -31,3 +31,7 @@ The original S02 work is in `internal/decision/laser.go` and its integration in 
 ### S04A
 
 The baseline is our published S02 commit `0e6fe8893373923952fa67fd5c0a450246ac10f2`. Our S02 review and the original shrinking-zone fixture motivated a shared eligibility check in the controller, combat and laser files. It uses the existing S02 charge duration and zone ETA. The inward-cube regression exercises the final controller action.
+
+### S04B
+
+Official protocol §§5–7 describe visible pickups, current horizontal and vertical reach, empty slots, duplicate kinds, concurrent action fields and server equip cooldown. Our post-decision search in `resources.go` reuses the current-position reach and retry conditions with the resource branch. It orders eligible lasers by horizontal distance and ID. The controller tests include a simultaneous gun shot, movement and upgrade choice, retry expiry, cooldown, and preserving the resource branch's existing pickup.

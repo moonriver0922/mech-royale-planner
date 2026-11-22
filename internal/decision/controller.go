@@ -110,7 +110,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
 		case "weapon":
-			if distance(s.Pos, r.pos) <= c.cfg.Loot["pickup_radius"] && math.Abs(s.Pos[2]-r.pos[2]) <= 4 {
+			if _, inReach := c.pickupReach(s.Pos, r.pos); inReach {
 				a.Take = &r.id
 			}
 		case "crate":
@@ -139,6 +139,9 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
 			a.Reload = true
 		}
+	}
+	if a.Take == nil {
+		a.Take = c.nearbyLaser(o)
 	}
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})

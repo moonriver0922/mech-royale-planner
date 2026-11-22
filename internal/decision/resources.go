@@ -19,6 +19,37 @@ func pickupID(raw json.RawMessage) (int, error) {
 	return id, err
 }
 
+func (c *Controller) pickupAllowed(o wire.Observation, item wire.Pickup) bool {
+	primary := o.Self.Weapons[0]
+	return (primary == nil || primary.Kind != item.Kind) &&
+		(item.ID != c.failedTake || o.T >= c.retryTakeAt)
+}
+
+func (c *Controller) pickupReach(self, pos wire.Vec3) (float64, bool) {
+	d := distance(self, pos)
+	return d, d <= c.cfg.Loot["pickup_radius"] && math.Abs(self[2]-pos[2]) <= 4
+}
+
+func (c *Controller) nearbyLaser(o wire.Observation) *int {
+	if o.Self.Weapons[1] != nil {
+		return nil
+	}
+	bestID, bestDistance := 0, math.Inf(1)
+	for _, item := range o.Pickups {
+		if item.Kind != "laser" || !c.pickupAllowed(o, item) {
+			continue
+		}
+		d, inReach := c.pickupReach(o.Self.Pos, item.Pos)
+		if inReach && (d < bestDistance || d == bestDistance && item.ID < bestID) {
+			bestDistance, bestID = d, item.ID
+		}
+	}
+	if math.IsInf(bestDistance, 1) {
+		return nil
+	}
+	return &bestID
+}
+
 func (c *Controller) resource(o wire.Observation) (resource, bool) {
 	best := resource{eta: math.Inf(1)}
 	s := o.Self
@@ -56,7 +87,7 @@ func (c *Controller) resource(o wire.Observation) (resource, bool) {
 	}
 	if s.Weapons[1] == nil {
 		for _, item := range o.Pickups {
-			if item.ID == c.failedTake && o.T < c.retryTakeAt || s.Weapons[0] != nil && s.Weapons[0].Kind == item.Kind {
+			if !c.pickupAllowed(o, item) {
 				continue
 			}
 			equip := c.cfg.Loot["equip_s"]
