@@ -2,6 +2,7 @@ package decision
 
 import (
 	"math"
+	"slices"
 	"strings"
 
 	"ownbot/internal/arena"
@@ -25,7 +26,8 @@ type Controller struct {
 	recovering   bool
 	coverValid   bool
 	cover        wire.Vec3
-	lastDamage   float64
+	damage       []incomingHit
+	killed       map[int]bool
 	lastDealt    float64
 	lastPosition wire.Vec3
 	moving       bool
@@ -36,9 +38,9 @@ type Controller struct {
 
 func NewController(cfg wire.Config, world *arena.Map) *Controller {
 	return &Controller{
-		cfg: cfg, world: world,
-		period:     cfg.Match["decide_every"] / max(1, cfg.Match["tick_hz"]),
-		lastDamage: math.Inf(-1), lastDealt: math.Inf(-1), failedTake: -1,
+		cfg: cfg, world: world, killed: make(map[int]bool),
+		period:    cfg.Match["decide_every"] / max(1, cfg.Match["tick_hz"]),
+		lastDealt: math.Inf(-1), failedTake: -1,
 	}
 }
 
@@ -50,11 +52,16 @@ func (c *Controller) stat(s wire.Self, k string) float64 {
 }
 
 func (c *Controller) update(o wire.Observation) {
+	c.trimDamage(o.T - c.stat(o.Self, "regen_delay"))
 	for _, e := range o.Events {
 		switch e.Type {
 		case "damaged":
-			c.lastDamage = o.T
-			c.coverValid = false
+			if e.By != nil && *e.By != o.Self.ID && !c.killed[*e.By] && e.Amount > 0 {
+				c.damage = append(c.damage, incomingHit{o.T, e.Amount, *e.By})
+			}
+		case "kill":
+			c.killed[e.Target] = true
+			c.damage = slices.DeleteFunc(c.damage, func(h incomingHit) bool { return h.attacker == e.Target })
 		case "hit":
 			c.lastDealt = o.T
 		case "take_failed":
@@ -94,12 +101,12 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, goal{kind: "zone"}, dest)
 		a.Boost = a.Move != (wire.Vec2{}) && !s.InZone && s.Grounded &&
 			s.Energy >= 2*c.stat(s, "boost_drain")*c.period
-		if hasEnemy && !c.recovering {
+		if hasEnemy {
 			c.fire(o, enemy, &a, false)
 		}
-	} else if move, covered, escape := c.recover(o); covered || escape {
+	} else if move, ok := c.recover(o); ok {
 		a.Move = move
-		if escape && hasEnemy {
+		if move != (wire.Vec2{}) && hasEnemy {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
