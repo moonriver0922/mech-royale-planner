@@ -94,7 +94,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, goal{kind: "zone"}, dest)
 		a.Boost = a.Move != (wire.Vec2{}) && !s.InZone && s.Grounded &&
 			s.Energy >= 2*c.stat(s, "boost_drain")*c.period
-		if hasEnemy && !c.recovering {
+		if hasEnemy {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if move, covered, escape := c.recover(o); covered || escape {

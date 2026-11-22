@@ -177,10 +177,16 @@ func (c *Controller) recover(o wire.Observation) (move wire.Vec2, covered, escap
 		return move, false, move != (wire.Vec2{})
 	}
 	c.recovering = true
-	if distance(s.Pos, c.cover) <= 1 {
+	nearCover := distance(s.Pos, c.cover) <= 1
+	if nearCover && c.exposure(o, s.Pos) == 0 {
 		return wire.Vec2{}, true, false
 	}
-	return c.follow(o, goal{kind: "cover"}, c.cover), true, false
+	move = c.follow(o, goal{kind: "cover"}, c.cover)
+	if nearCover && move == (wire.Vec2{}) {
+		// The follower's arrival tolerance can stop on the exposed side.
+		c.coverValid = false
+	}
+	return move, false, true
 }
 
 func (c *Controller) exposure(o wire.Observation, p wire.Vec3) int {
