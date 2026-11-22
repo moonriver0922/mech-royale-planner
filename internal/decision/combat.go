@@ -186,6 +186,8 @@ func (c *Controller) fire(o wire.Observation, s shot, a *wire.Action, allowLaser
 	}
 }
 
+const playerRangeFraction = 0.55
+
 func (c *Controller) engage(o wire.Observation, s shot) wire.Vec2 {
 	c.target = goal{kind: "enemy", id: s.id}
 	c.route = nil
@@ -194,6 +196,25 @@ func (c *Controller) engage(o wire.Observation, s shot) wire.Vec2 {
 	orbit := math.Pi / 2
 	if (int(o.T/3)+o.Self.ID)%2 == 1 {
 		orbit = -orbit
+	}
+	// Player slots occupy IDs 0–15. Use the reported horizontal separation
+	// here, independently of the projectile intercept used for aiming.
+	if s.id >= 0 && s.id < 16 {
+		for _, w := range o.Self.Weapons {
+			if w == nil || w.Kind != "gun" {
+				continue
+			}
+			speed, radius := c.stat(o.Self, "walk_speed"), c.stat(o.Self, "radius")
+			visionLimit := max(0, c.cfg.Vision["range"]-radius-speed*c.period)
+			desired := min(playerRangeFraction*c.weapon(w, "range"), visionLimit)
+			// Vary the heading continuously across one second of walking
+			// either side of the desired range. At the limits the heading
+			// is 30 or 150 degrees, retaining half-speed lateral motion.
+			halfBand := max(1, radius, speed)
+			errorRatio := (distance(p, s.pos) - desired) / halfBand
+			orbit *= 1 - (2.0/3)*max(-1, min(1, errorRatio))
+			return c.step(o, yaw+orbit, false)
+		}
 	}
 	r := c.cfg.NPC["aggro_range"]
 	if s.distance > r*2 {
