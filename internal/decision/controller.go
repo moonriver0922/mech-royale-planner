@@ -15,6 +15,7 @@ type goal struct {
 
 type Controller struct {
 	laser        laserState
+	pressure     pressureHistory
 	cfg          wire.Config
 	world        *arena.Map
 	period       float64
@@ -50,6 +51,7 @@ func (c *Controller) stat(s wire.Self, k string) float64 {
 }
 
 func (c *Controller) update(o wire.Observation) {
+	c.pressure.observe(o, c.stat(o.Self, "regen_delay"))
 	for _, e := range o.Events {
 		switch e.Type {
 		case "damaged":
