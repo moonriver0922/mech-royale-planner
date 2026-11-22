@@ -11,6 +11,7 @@ type shot struct {
 	pos, center, velocity, origin wire.Vec3
 	aim                           wire.Vec2
 	time, distance, radius, hp    float64
+	height                        float64
 }
 
 func (c *Controller) weapon(w *wire.Weapon, name string) float64 {
@@ -21,18 +22,26 @@ func (c *Controller) weapon(w *wire.Weapon, name string) float64 {
 }
 
 func (c *Controller) bestEnemy(o wire.Observation) (shot, bool) {
-	var best shot
-	found := false
+	var best, obscured shot
+	found, retainCharge := false, false
 	for _, p := range o.Mechs {
 		stats := c.cfg.Mech
 		if p.Kind == "npc" {
 			stats = c.cfg.NPC
 		}
 		scale := 1 + float64(p.Cubes)*c.cfg.Cubes.SizePerCube
-		s, ok := c.solve(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP)
+		s, ok := c.solveTarget(o, p.ID, p.Pos, p.Vel, stats["height"]*scale, stats["radius"]*scale, p.HP, true)
+		if !ok && c.laser.held && c.target == (goal{"enemy", p.ID}) {
+			// The actor is still reported. Wait briefly for a clear ray instead
+			// of dropping a charged trigger the instant an obstacle intervenes.
+			obscured, retainCharge = s, true
+		}
 		if ok && (!found || c.prefer(s, best)) {
 			best, found = s, true
 		}
+	}
+	if !found && retainCharge {
+		return obscured, true
 	}
 	return best, found
 }
@@ -73,14 +82,29 @@ func intercept(offset, velocity wire.Vec3, speed float64) float64 {
 }
 
 func (c *Controller) solve(o wire.Observation, id int, pos, vel wire.Vec3, height, radius, hp float64) (shot, bool) {
+	return c.solveTarget(o, id, pos, vel, height, radius, hp, false)
+}
+
+func (c *Controller) solveTarget(o wire.Observation, id int, pos, vel wire.Vec3, height, radius, hp float64, enemy bool) (shot, bool) {
 	base := o.Self.Pos
 	base[2] += c.stat(o.Self, "muzzle_height")
 	center := pos
 	center[2] += height / 2
-	var best shot
+	v := sub(center, base)
+	target := shot{id: id, pos: pos, center: center, velocity: vel, origin: base, radius: radius, hp: hp, height: height, aim: angles(v), distance: math.Sqrt(dot(v, v))}
+	best := target
 	found := false
 	for _, w := range o.Self.Weapons {
-		if w == nil || (w.Kind != "gun" && w.Kind != "lightning") {
+		if w == nil {
+			continue
+		}
+		switch w.Kind {
+		case "gun", "lightning":
+		case "laser":
+			if !enemy || !c.laser.available(o, w) {
+				continue
+			}
+		default:
 			continue
 		}
 		point := center
@@ -101,18 +125,28 @@ func (c *Controller) solve(o wire.Observation, id int, pos, vel wire.Vec3, heigh
 		} else if aim[1] < c.stat(o.Self, "min_pitch") || aim[1] > c.stat(o.Self, "max_pitch") {
 			continue
 		}
-		muzzle := add(base, dir, min(d/2, c.stat(o.Self, "radius")+.5))
-		if !c.world.ClearShot(base, muzzle) || !c.world.ClearShot(muzzle, point) {
-			continue
+		if w.Kind == "laser" {
+			if !c.laserRay(o, w, target, aim, 0) {
+				continue
+			}
+		} else {
+			muzzle := add(base, dir, min(d/2, c.stat(o.Self, "radius")+.5))
+			if !c.world.ClearShot(base, muzzle) || !c.world.ClearShot(muzzle, point) {
+				continue
+			}
 		}
 		closing := max(0, d-c.weapon(w, "range")) / max(1, c.stat(o.Self, "walk_speed"))
 		ready := max(w.Cooldown, w.Reload)
 		if w.Kind == "lightning" && o.Self.Energy < c.weapon(w, "energy") {
 			continue
 		}
+		if w.Kind == "laser" {
+			closing = 0 // finite muzzle ray already intersects the target
+			ready = max(ready, c.weapon(w, "min_charge")-w.Charge)
+		}
 		time := max(yawTime, pitchTime, closing, ready)
 		if !found || time < best.time {
-			best = shot{id, pos, center, vel, base, aim, time, d, radius, hp}
+			best.aim, best.time, best.distance = aim, time, d
 			found = true
 		}
 	}
@@ -124,7 +158,10 @@ func (c *Controller) lead(w *wire.Weapon, center, origin, velocity wire.Vec3) wi
 	return add(center, velocity, t)
 }
 
-func (c *Controller) fire(o wire.Observation, s shot, a *wire.Action) {
+func (c *Controller) fire(o wire.Observation, s shot, a *wire.Action, allowLaser bool) {
+	// Set the common command before authorizing either trigger.
+	laserControls := allowLaser && c.planLaser(o, s, a)
+
 	for i, w := range o.Self.Weapons {
 		if w == nil || w.Cooldown > c.period {
 			continue
@@ -134,16 +171,7 @@ func (c *Controller) fire(o wire.Observation, s shot, a *wire.Action) {
 			if w.Ammo <= 0 || w.Reload > 0 {
 				continue
 			}
-			// A geometric tolerance uses the present torso ray, not the aim command.
-			dir := direction(o.Self.Aim)
-			v := sub(c.lead(w, s.center, s.origin, s.velocity), s.origin)
-			along := dot(dir, v)
-			tolerance := .9*s.radius + c.cfg.Projectile["gun_radius"]
-			if along <= 0 || along > c.weapon(w, "range") || dot(v, v)-along*along > tolerance*tolerance {
-				continue
-			}
-			muzzle := add(s.origin, dir, min(along/2, c.stat(o.Self, "radius")+.5))
-			if c.world.ClearShot(s.origin, muzzle) && c.world.ClearShot(muzzle, add(s.origin, dir, along)) {
+			if c.gunAligned(o, w, s, o.Self.Aim) && (!laserControls || c.gunAligned(o, w, s, c.nextAim(o, a.Aim))) {
 				a.Fire[i] = true
 			}
 		case "lightning":
@@ -196,3 +224,15 @@ func direction(a wire.Vec2) wire.Vec3 {
 }
 
 func wrap(x float64) float64 { return math.Remainder(x, 2*math.Pi) }
+
+func (c *Controller) gunAligned(o wire.Observation, w *wire.Weapon, s shot, aim wire.Vec2) bool {
+	dir := direction(aim)
+	v := sub(c.lead(w, s.center, s.origin, s.velocity), s.origin)
+	along := dot(dir, v)
+	tolerance := .9*s.radius + c.cfg.Projectile["gun_radius"]
+	if along <= 0 || along > c.weapon(w, "range") || dot(v, v)-along*along > tolerance*tolerance {
+		return false
+	}
+	muzzle := add(s.origin, dir, min(along/2, c.stat(o.Self, "radius")+.5))
+	return c.world.ClearShot(s.origin, muzzle) && c.world.ClearShot(muzzle, add(s.origin, dir, along))
+}

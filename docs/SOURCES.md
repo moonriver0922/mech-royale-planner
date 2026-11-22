@@ -21,3 +21,9 @@
 | `internal/decision/controller_test.go` | 小型地面比赛夹具，测试最终动作 | 集成 |
 | `Dockerfile`、`.dockerignore` | 按协议 §1 的最小入口定义，启动同一 Go 命令 | 协议实现，集成复查 |
 | `README.md`、`docs/*` | 构建复现、设计和来源 | 集成 |
+
+### S02
+
+S02 branches directly from our own S00 root at `19126d6516826c1de4e0e54c107c7bc4d6a23d81`. The laser work used that tree, our design memo and the official kit. Protocol §3 supplies coasting and missed-trigger semantics. Sections 5 and 6 define observed weapon stats, actual aim, events and action duration. Section 7 supplies cylinder geometry, forward muzzle, charge/release, forced discharge, lightning short and pickup rules. Section 10 supplies size scaling. Fallback rates, timeouts and range come from the match hello. No opponent implementation or simulator source was used to write S02.
+
+The original S02 work is in `internal/decision/laser.go` and its integration in the existing combat, navigation, controller and resource files. `laser_test.go` exercises actions through `Decide` on synthetic map fixtures. Linear prediction, the finite cylinder intersection, shared-turret scheduling, the short post-charge alignment window and zone ETA are our implementation choices. The controller acts on current observations, with bounded static map segment queries. No training data or extra dependencies are required.

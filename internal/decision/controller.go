@@ -14,6 +14,7 @@ type goal struct {
 }
 
 type Controller struct {
+	laser        laserState
 	cfg          wire.Config
 	world        *arena.Map
 	period       float64
@@ -78,6 +79,7 @@ func (c *Controller) update(o wire.Observation) {
 
 func (c *Controller) Decide(o wire.Observation) wire.Action {
 	c.update(o)
+	c.observeLaser(o)
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
 	shootingCrate := false
@@ -93,16 +95,16 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Boost = a.Move != (wire.Vec2{}) && !s.InZone && s.Grounded &&
 			s.Energy >= 2*c.stat(s, "boost_drain")*c.period
 		if hasEnemy && !c.recovering {
-			c.fire(o, enemy, &a)
+			c.fire(o, enemy, &a, false)
 		}
 	} else if move, covered, escape := c.recover(o); covered || escape {
 		a.Move = move
 		if escape && hasEnemy {
-			c.fire(o, enemy, &a)
+			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a)
+		c.fire(o, enemy, &a, true)
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
 		switch r.kind {
@@ -114,14 +116,14 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			if shot, ok := c.solve(o, r.id, r.pos, wire.Vec3{}, c.cfg.Crates["height"], c.cfg.Crates["radius"], 0); ok && shot.time <= max(s.Weapons[0].Reload, 1) {
 				shootingCrate = true
 				a.Aim = shot.aim
-				c.fire(o, shot, &a)
+				c.fire(o, shot, &a, false)
 				a.Move = wire.Vec2{}
 				c.target = r.goal
 			}
 		}
 	} else if hasEnemy {
 		a.Move = c.engage(o, enemy)
-		c.fire(o, enemy, &a)
+		c.fire(o, enemy, &a, true)
 	} else {
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
@@ -137,6 +139,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			a.Reload = true
 		}
 	}
+	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})
 	return a
 }

@@ -56,9 +56,18 @@ func (c *Controller) resource(o wire.Observation) (resource, bool) {
 	}
 	if s.Weapons[1] == nil {
 		for _, item := range o.Pickups {
-			if item.Kind == "lightning" && !(item.ID == c.failedTake && o.T < c.retryTakeAt) {
-				consider("weapon", item.ID, item.Pos, c.cfg.Loot["equip_s"])
+			if item.ID == c.failedTake && o.T < c.retryTakeAt || s.Weapons[0] != nil && s.Weapons[0].Kind == item.Kind {
+				continue
 			}
+			equip := c.cfg.Loot["equip_s"]
+			switch item.Kind {
+			case "laser":
+				equip = max(equip, c.cfg.Weapons["laser"]["cooldown"])
+			case "lightning":
+			default:
+				continue
+			}
+			consider("weapon", item.ID, item.Pos, equip)
 		}
 	}
 	if best.kind == "" && canGrow && s.Weapons[0] != nil && s.Weapons[0].Kind == "gun" {

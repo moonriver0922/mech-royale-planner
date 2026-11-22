@@ -35,11 +35,19 @@ func margin(z wire.Zone, p wire.Vec3, now, when float64) float64 {
 }
 
 func (c *Controller) travel(o wire.Observation, length float64) float64 {
+	return c.travelSlowed(o, length, c.laserSlowTime(o))
+}
+func (c *Controller) travelSlowed(o wire.Observation, length, slowFor float64) float64 {
 	speed := max(1, c.stat(o.Self, "walk_speed"))
-	return length/speed + speed/max(1, c.stat(o.Self, "ground_accel"))
+	mult := max(.01, min(1, c.stat(o.Self, "charge_move_mult")))
+	slowTime := min(slowFor, length/(speed*mult))
+	return length/speed + slowTime*(1-mult) + speed/max(1, c.stat(o.Self, "ground_accel"))
 }
 
 func (c *Controller) zoneGoal(o wire.Observation) (wire.Vec3, bool) {
+	return c.zoneWithSlowTime(o, c.laserSlowTime(o))
+}
+func (c *Controller) zoneWithSlowTime(o wire.Observation, slowFor float64) (wire.Vec3, bool) {
 	z, p := o.Zone, o.Self.Pos
 	n := z.NextCenter
 	if z.ShrinkEnd <= z.ShrinkStart {
@@ -68,7 +76,7 @@ func (c *Controller) zoneGoal(o wire.Observation) (wire.Vec3, bool) {
 		}
 		length = max(length, leg+distance(p, dest))
 	}
-	deadline := c.travel(o, length*1.2) + 2*c.period
+	deadline := c.travelSlowed(o, length*1.2, slowFor) + 2*c.period
 	return dest, margin(z, o.Self.Pos, o.T, o.T+deadline) <= 0
 }
 
