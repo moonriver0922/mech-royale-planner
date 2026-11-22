@@ -39,8 +39,9 @@ func sample(t *testing.T, wall bool) (*Controller, wire.Observation) {
 		"mech":{"radius":2.5,"height":9,"muzzle_height":7,"walk_speed":12,"ground_accel":60,"turn_rate":4,"pitch_rate":3,"min_pitch":-0.7,"max_pitch":1.3,"regen_delay":5},
 		"npc":{"aggro_range":45},
 		"loot":{"pickup_radius":4,"equip_s":1},
+		"crates":{"radius":1.4,"height":2.4},
 		"cubes":{"stat_cap":10},
-		"weapons":{"gun":{"speed":250,"range":200,"mag":12,"cooldown":0.24},"lightning":{"range":45,"cone_deg":30,"energy":3}},
+		"weapons":{"gun":{"speed":250,"range":200,"mag":12,"reload":2.4,"cooldown":0.24},"lightning":{"range":45,"cone_deg":30,"energy":3}},
 		"upgrades":[{"id":"plating","effects":[{"path":"mech.hp","mul":1.15}]}]
 	}`), &cfg)
 	if err != nil {

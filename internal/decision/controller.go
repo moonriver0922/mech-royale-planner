@@ -26,6 +26,7 @@ type Controller struct {
 	cover        wire.Vec3
 	lastDamage   float64
 	lastDealt    float64
+	quietSince   float64
 	lastPosition wire.Vec3
 	moving       bool
 	blockedFor   float64
@@ -37,7 +38,7 @@ func NewController(cfg wire.Config, world *arena.Map) *Controller {
 	return &Controller{
 		cfg: cfg, world: world,
 		period:     cfg.Match["decide_every"] / max(1, cfg.Match["tick_hz"]),
-		lastDamage: math.Inf(-1), lastDealt: math.Inf(-1), failedTake: -1,
+		lastDamage: math.Inf(-1), lastDealt: math.Inf(-1), quietSince: math.Inf(1), failedTake: -1,
 	}
 }
 
@@ -129,11 +130,21 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		a.Move = c.follow(o, goal{kind: "scout", id: int(phase)}, dest)
 	}
 
+	// The protocol keeps actors tracked briefly behind cover and only reports
+	// hostile projectiles. Either interrupts the observed quiet interval.
+	if len(o.Mechs) != 0 || len(o.Projectiles) != 0 || shootingCrate || a.Fire != ([2]bool{}) {
+		c.quietSince = math.Inf(1)
+	} else {
+		c.quietSince = min(c.quietSince, o.T)
+	}
+	combatQuiet := o.T-max(c.lastDamage, c.lastDealt) >= c.stat(s, "regen_delay")
 	for i, w := range s.Weapons {
 		if w == nil || w.Kind != "gun" || w.Reload > 0 || a.Fire[i] {
 			continue
 		}
-		if w.Ammo == 0 || (!hasEnemy && !shootingCrate && float64(w.Ammo) < c.weapon(w, "mag")) {
+		topOff := float64(w.Ammo) < c.weapon(w, "mag") && combatQuiet &&
+			o.T-c.quietSince >= c.weapon(w, "reload")
+		if w.Ammo == 0 || topOff {
 			a.Reload = true
 		}
 	}
