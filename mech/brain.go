@@ -738,14 +738,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 			if hpFrac <= 0.5 {
 				r *= 0.57
 			}
-			var bc *Vec3
-			for _, c := range b.cubes {
-				if d := hyp(c.Pos[0]-x, c.Pos[1]-y); d < r {
-					r = d
-					cp := c.Pos
-					bc = &cp
-				}
-			}
+			bc := b.fightLootCube(o, seen, r)
 			if bc != nil {
 				mx, my = b.travel(me, bc[0], bc[1])
 				mode = "fight:cube"
