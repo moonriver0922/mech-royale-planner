@@ -14,6 +14,7 @@ type goal struct {
 }
 
 type Controller struct {
+	crossfire    crossfireState
 	laser        laserState
 	cfg          wire.Config
 	world        *arena.Map
@@ -79,10 +80,12 @@ func (c *Controller) update(o wire.Observation) {
 
 func (c *Controller) Decide(o wire.Observation) wire.Action {
 	c.update(o)
+	c.recordIncoming(o)
 	c.observeLaser(o)
 	a := wire.Action{Tick: o.Tick, Aim: o.Self.Aim, Pick: c.upgrade(o)}
 	s := o.Self
 	shootingCrate := false
+	engaging, scouting := false, false
 	enemy, hasEnemy := c.bestEnemy(o)
 	if hasEnemy {
 		a.Aim = enemy.aim
@@ -103,6 +106,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			c.fire(o, enemy, &a, false)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
+		engaging = true
 		c.engageWithGrowth(o, enemy, &a)
 	} else if r, ok := c.resource(o); ok {
 		a.Move = c.follow(o, r.goal, r.pos)
@@ -121,8 +125,10 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			}
 		}
 	} else if hasEnemy {
+		engaging = true
 		c.engageWithGrowth(o, enemy, &a)
 	} else {
+		scouting = true
 		center, radius := circle(o.Zone, o.T, o.T+3)
 		phase := math.Floor(o.T/9) + float64(s.ID)
 		dest := c.onGround(center[0]+math.Cos(phase*2.4)*radius*.55, center[1]+math.Sin(phase*2.4)*radius*.55)
@@ -137,6 +143,7 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 			a.Reload = true
 		}
 	}
+	c.crossfireMove(o, enemy, engaging, scouting, &a)
 	c.rememberLaser(o, a)
 	c.moving = a.Move != (wire.Vec2{})
 	return a
