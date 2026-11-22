@@ -81,12 +81,20 @@ func (c *Controller) zoneWithSlowTime(o wire.Observation, slowFor float64) (wire
 }
 
 func (c *Controller) follow(o wire.Observation, g goal, dest wire.Vec3) wire.Vec2 {
+	const arrivalRadius = .25
 	s, p := o.Self, o.Self.Pos
 	changed := c.target != g || distance(c.destination, dest) > 7 || math.Abs(c.destination[2]-dest[2]) > 2
-	if changed || (o.T >= c.replanAt && (len(c.route) == 0 || c.blockedFor > .5)) {
-		c.target, c.destination = g, dest
-		c.route, _ = c.world.Route(p, dest, c.stat(s, "radius"), c.stat(s, "height"))
+	staleTerminal := !changed && len(c.route) == 1 && distance(p, c.route[0]) < arrivalRadius && distance(p, dest) >= arrivalRadius
+	if staleTerminal && c.walk(s, p, dest) {
+		c.route[0], c.destination = dest, dest
+	} else if changed || (o.T >= c.replanAt && (staleTerminal || len(c.route) == 0 || c.blockedFor > .5)) {
+		path, _ := c.world.Route(p, dest, c.stat(s, "radius"), c.stat(s, "height"))
 		c.replanAt = o.T + .6
+		if staleTerminal && (len(path) == 0 || !c.walk(s, p, path[0])) {
+			// Hold the reached terminal until the next permitted detour search.
+			return wire.Vec2{}
+		}
+		c.target, c.destination, c.route = g, dest, path
 	}
 	for len(c.route) > 1 && distance(p, c.route[0]) < 2 && c.walk(s, p, c.route[1]) {
 		c.route = c.route[1:]
@@ -95,7 +103,7 @@ func (c *Controller) follow(o wire.Observation, g goal, dest wire.Vec3) wire.Vec
 	if len(c.route) > 0 {
 		next = c.route[0]
 	}
-	if distance(p, next) < .25 {
+	if distance(p, next) < arrivalRadius {
 		return wire.Vec2{}
 	}
 	yaw := math.Atan2(next[1]-p[1], next[0]-p[0])
