@@ -60,13 +60,35 @@ func TestUncoveredRetreatGunFallback(t *testing.T) {
 	}
 }
 
-func TestRetreatToCoverReleasesHeldLaser(t *testing.T) {
-	c, o := laserScene(t, true)
-	o.Self.HP = 400
-	o.Self.Pos[1], o.Mechs[0].Pos[1] = 22, 22
-	o.Self.Weapons[1].Charge = .3
-	a := c.Decide(o)
-	if a.Move == (wire.Vec2{}) || c.target.kind != "cover" || a.Fire != [2]bool{} {
-		t.Fatalf("want movement toward cover with both triggers released; got %+v goal=%+v", a, c.target)
+func TestRetreatToCoverFinishesOnlyAnActiveLaser(t *testing.T) {
+	for _, charge := range []float64{.3, 0, .75} {
+		c, o := laserScene(t, true)
+		o.Self.HP = 400
+		o.Self.Pos[1], o.Mechs[0].Pos[1] = 22, 22
+		o.Self.Weapons[1].Charge = charge
+		a := c.Decide(o)
+		if a.Move == (wire.Vec2{}) || c.target.kind != "cover" || a.Fire != [2]bool{false, charge == .3} {
+			t.Fatalf("cover travel with charge %.2f: got %+v goal=%+v", charge, a, c.target)
+		}
+	}
+}
+
+func TestHeldLaserReleasesAtStationaryCoverAndOnUrgentZoneMove(t *testing.T) {
+	for _, urgent := range []bool{false, true} {
+		c, o := laserScene(t, !urgent)
+		o.Self.HP = 400
+		o.Self.Weapons[1].Charge = .3
+		o.Self.Weapons[0].Reload = 1.1
+		if urgent {
+			o.Self.InZone = false
+			o.Self.Pos[0] = 15
+			o.Zone.Radius, o.Zone.NextRadius = 10, 10
+		}
+		a := c.Decide(o)
+		if a.Fire != [2]bool{} ||
+			(urgent && (c.target.kind != "zone" || a.Move[0] >= 0)) ||
+			(!urgent && (!c.recovering || a.Move != (wire.Vec2{}))) {
+			t.Fatalf("urgent=%t: got %+v goal=%+v", urgent, a, c.target)
+		}
 	}
 }

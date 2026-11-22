@@ -99,9 +99,11 @@ func (c *Controller) Decide(o wire.Observation) wire.Action {
 		}
 	} else if move, covered, escape := c.recover(o); covered || escape {
 		a.Move = move
+		finishCharge := c.laser.held && s.Weapons[c.laser.slot].Charge > 0
 		if escape && hasEnemy {
-			finishCharge := c.laser.held && s.Weapons[c.laser.slot].Charge > 0
 			c.fire(o, enemy, &a, finishCharge)
+		} else if hasEnemy && finishCharge && move != (wire.Vec2{}) {
+			c.planLaser(o, enemy, &a)
 		}
 	} else if hasEnemy && enemy.time <= c.period*2 {
 		a.Move = c.engage(o, enemy)
